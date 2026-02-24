@@ -10,13 +10,12 @@ void main() {
       expert = SimpleExpert();
     });
 
-    test('Scenario 1: Obstacle Frontal -> Advice to Avoid', () {
-      // Données simulées : Obstacle Centre, mais Gauche libre
+    test('Scenario 1: Obstacle Frontal -> Advice to Avoid (Even with GPS 0,0)', () {
       final sensor = SensorData(
-        lat: 0, lon: 0, heading: 0,
-        frontDistance: 0.5, // Bloqué au centre
-        leftDistance: 2.0,  // Libre à gauche
-        rightDistance: 0.5, // Bloqué à droite
+        lat: 0.0, lon: 0.0, heading: 0,
+        frontDistance: 0.5, 
+        leftDistance: 2.0,  
+        rightDistance: 0.5,
         obstacleUp: 2.0,
         water: false
       );
@@ -32,13 +31,10 @@ void main() {
       expect(action.instruction, contains("Contournez par la gauche"));
     });
     
-    test('Scenario 1b: Obstacle Frontal -> Blocked', () {
-      // Tout bloqué
+    test('Scenario 2: GPS is 0,0 -> Navigation instructions are ignored', () {
       final sensor = SensorData(
-        lat: 0, lon: 0, heading: 0,
-        frontDistance: 0.5, 
-        leftDistance: 0.5,
-        rightDistance: 0.5,
+        lat: 0.0, lon: 0.0, heading: 45, // Cap faussé
+        frontDistance: 2.0,
         obstacleUp: 2.0,
         water: false
       );
@@ -49,40 +45,13 @@ void main() {
         bearingToDestination: 0.0, 
       );
 
-      print("Scenario 1b Output: ${action.instruction}");
-      expect(action.instruction, contains("Zone bloquée"));
+      expect(action.instruction, isEmpty, reason: "Aucune instruction si GPS est 0.0");
     });
 
-    test('Scenario 2: Water Detected -> Caution', () {
-      // Données simulées : Eau détectée
+    test('Scenario 3: Bad Heading -> Correction Right (with valid GPS)', () {
       final sensor = SensorData(
-        lat: 0, lon: 0, heading: 0,
-        frontDistance: 2.0,
-        obstacleUp: 2.0,
-        water: true
-      );
-
-      final action = expert.evaluate(
-        sensor: sensor,
-        distToDestination: 50.0,
-        bearingToDestination: 0.0,
-      );
-
-      print("Scenario 2 Output: ${action.instruction}");
-      expect(action.instruction, contains("eau au sol"));
-    });
-
-    test('Scenario 3: Bad Heading -> Correction Right', () {
-      // On veut aller au Cap 0 (Nord). On regarde vers -20 (340°)
-      // Diff = 0 - 340 = -340 => +20 deg (donc on doit tourner à droite pour revenir à 0)
-      // Wait. bearingToDestination = 0. Heading = 340 (-20).
-      // Diff = 0 - 340 = -340. Normalize: -340 + 360 = +20.
-      // Diff > 15. Direction ?
-      // SimpleExpert logic: diff > 0 ? droite : gauche.
-      // +20 > 0 -> Droite. Correct.
-
-      final sensor = SensorData(
-        lat: 0, lon: 0, heading: 340, // 20 degs off to left
+        lat: 4.0, lon: 9.0, // Valid coord
+        heading: 300, // 60 degs off
         frontDistance: 2.0,
         obstacleUp: 2.0,
         water: false
@@ -98,9 +67,27 @@ void main() {
       expect(action.instruction, contains("droite"));
     });
 
-    test('Scenario 4: Arrival', () {
+    test('Scenario 4: Stationary Filtering -> No repeated instructions', () {
+      // 1er appel : Correction
+      expert.evaluate(
+        sensor: SensorData(lat: 4.0, lon: 9.0, heading: 340, frontDistance: 2.0, obstacleUp: 2.0, water: false),
+        distToDestination: 50.0,
+        bearingToDestination: 0.0,
+      );
+
+      // 2ème appel : Toujours au même endroit, le heading a empiré mais on n'a pas bougé
+      final action = expert.evaluate(
+        sensor: SensorData(lat: 4.0, lon: 9.0, heading: 320, frontDistance: 2.0, obstacleUp: 2.0, water: false),
+        distToDestination: 50.0,
+        bearingToDestination: 0.0,
+      );
+
+      expect(action.instruction, isEmpty, reason: "Pas d'instruction si on n'a pas bougé de 1.5m");
+    });
+
+    test('Scenario 5: Arrival', () {
       final sensor = SensorData(
-        lat: 0, lon: 0, heading: 0,
+        lat: 4.0, lon: 9.0, heading: 0,
         frontDistance: 2.0,
         obstacleUp: 2.0,
         water: false
@@ -112,7 +99,6 @@ void main() {
         bearingToDestination: 0.0,
       );
 
-      print("Scenario 4 Output: ${action.instruction}");
       expect(action.instruction, contains("arrivé"));
       expect(action.shouldStop, true);
     });

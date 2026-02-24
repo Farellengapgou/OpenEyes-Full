@@ -36,24 +36,69 @@ class BleService {
   Stream<SensorData> get sensorStream => _sensorDataController.stream;
   
   /// Helper pour savoir si on est actuellement connecté.
-  bool get isConnected => _connectedDevice != null;
+  bool get isConnected => _connectedDevice != null || isSimulating;
+  bool isSimulating = false;
+  Timer? _simulationTimer;
+
+  // Dernières valeurs pour fusion
+  double _latestLat = 0.0;
+  double _latestLon = 0.0;
+  double _latestHeading = 0.0;
+  double _latestDistCenter = 99.9;
+  double _latestDistLeft = 99.9;
+  double _latestDistRight = 99.9;
+  double _latestObstacleUp = 99.9;
+  bool _latestWater = false;
+
+  /// Démarre une simulation logicielle de la canne (pour tests sans hardware).
+  void startSimulation() {
+    print("🎭 DÉMARRAGE DU SIMULATEUR CANNE (Mode Fantôme)");
+    isSimulating = true;
+    int step = 0;
+
+    _simulationTimer?.cancel();
+    _simulationTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
+      if (!isSimulating) {
+        timer.cancel();
+        return;
+      }
+
+      step++;
+      // On simule une marche progressive (environ Yaoundé)
+      _latestLat = 3.866 + (step * 0.00005); 
+      _latestLon = 11.517 + (step * 0.00005);
+      _latestHeading = 45.0; 
+
+      // On simule des évènements périodiques
+      if (step == 4) {
+        print("🎭 SIM: Obstacle frontal détecté !");
+        _latestDistCenter = 0.5;
+      } else if (step == 8) {
+        print("🎭 SIM: Eau détectée !");
+        _latestDistCenter = 2.0;
+        _latestWater = true;
+      } else {
+        _latestDistCenter = 99.9;
+        _latestWater = false;
+      }
+
+      _emitSensorData();
+    });
+  }
+
+  /// Arrête la simulation ou le BLE.
+  void dispose() {
+    isSimulating = false;
+    _simulationTimer?.cancel();
+    _sensorDataController.close();
+  }
   
   // --- ÉTAT INTERNE POUR FUSION DES DONNÉES ---
   // Comme les 4 caractéristiques envoient leurs données indépendamment,
   // on les accumule ici avant de créer un SensorData complet.
   
-  double _latestLat = 0.0;
-  double _latestLon = 0.0;
-  double _latestHeading = 0.0;
-  
   // Distances par secteur (pour l'évitement)
-  double _latestDistLeft = 99.9;
-  double _latestDistCenter = 99.9;
-  double _latestDistRight = 99.9;
   
-  double _latestObstacleUp = 99.9;
-  bool _latestWater = false;
-
   // --- MÉTHODES ---
 
   /// Lance le scan et tente de se connecter automatiquement au device cible.

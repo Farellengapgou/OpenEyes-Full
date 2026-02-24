@@ -132,8 +132,8 @@ class NavigationController {
       _watchdog?.cancel();
       _watchdog = Timer(const Duration(seconds: 15), () async {
         if (!dataReceived && isNavigating) {
-          await _audioGuidance.speak("La canne ne répond pas. Passage sur GPS téléphone.");
-          _startGpsFallback();
+          await _audioGuidance.speak("La canne ne répond pas. Activation du mode simulation pour le test.");
+          _bleService.startSimulation();
         }
       });
 

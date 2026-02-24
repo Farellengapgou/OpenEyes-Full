@@ -149,8 +149,7 @@ class SimpleExpert {
     } else {
       // --- RÈGLE 5 : CONFIRMATION DEVANT ---
       // Si on est dans la bonne direction (< 30° écart).
-      // On rassure l'utilisateur de temps en temps (15 secondes).
-      if (_shouldSpeak("GOOD", 15)) {
+      if (diff.abs() <= 30 && _shouldSpeak("GOOD", 15)) {
          return ExpertAction(instruction: "Continuez tout droit.");
       }
     }
