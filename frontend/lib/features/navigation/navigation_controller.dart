@@ -1,121 +1,121 @@
-import 'dart:async'; // Ajout StreamController
-import 'package:geolocator/geolocator.dart'; 
-import 'ble_service.dart'; 
-import 'simple_expert.dart'; 
-import 'audio_guidance.dart'; 
-import 'sensor_data.dart'; 
-import 'route_manager.dart'; // Gestion des waypoints
-import '../../services/api_service.dart'; // Connexion Backend
+import 'dart:async';
+import 'package:geolocator/geolocator.dart';
+import 'ble_service.dart';
+import 'simple_expert.dart';
+import 'audio_guidance.dart';
+import 'sensor_data.dart';
+import 'route_manager.dart';
+import '../../services/maps_service.dart'; // ✅ Remplace ApiService
 
 /// CONTRÔLEUR PRINCIPAL (ORCHESTRATEUR)
-/// FUSION : Backend Route + Données Canne
+/// Navigation entièrement locale : MapsService → Nominatim + OSRM directs.
+/// Plus aucune dépendance au backend Python.
 class NavigationController {
   // --- DÉPENDANCES ---
-  final BleService _bleService; // Injection possible si besoin
+  final BleService _bleService;
   final AudioGuidance _audioGuidance;
   final SimpleExpert _expert;
   final RouteManager _routeManager;
-  final ApiService _apiService; // ✅ Injection ApiService
+  final MapsService _mapsService; // ✅ Remplace ApiService
 
   // --- ÉTAT ---
   bool isNavigating = false;
-  bool _mockMode = true; // Pour la démo sans backend
 
-  // Stream pour mettre à jour l'UI (texte affiché)
-  final StreamController<String> _instructionController = StreamController<String>.broadcast();
+  // Stream pour mettre à jour l'UI
+  final StreamController<String> _instructionController =
+      StreamController<String>.broadcast();
   Stream<String> get instructionStream => _instructionController.stream;
-  
-  // Constructeur avec Injection de Dépendance
+
+  /// Constructeur avec injection de dépendances.
   NavigationController({
     BleService? bleService,
     AudioGuidance? audioGuidance,
     SimpleExpert? expert,
     RouteManager? routeManager,
-    ApiService? apiService,
-  }) : 
-    _bleService = bleService ?? BleService(),
-    _audioGuidance = audioGuidance ?? AudioGuidance(),
-    _expert = expert ?? SimpleExpert(),
-    _routeManager = routeManager ?? RouteManager(),
-    _apiService = apiService ?? ApiService(baseUrl: ApiService.baseUrl); // Fallback temporaire pour compatibilité
+    MapsService? mapsService,
+  })  : _bleService = bleService ?? BleService(),
+        _audioGuidance = audioGuidance ?? AudioGuidance(),
+        _expert = expert ?? SimpleExpert(),
+        _routeManager = routeManager ?? RouteManager(),
+        _mapsService = mapsService ?? MapsService();
 
-  // --- MÉTHODES PUBLIQUES ---
+  // ─────────────────────────────────────────────
+  // API PUBLIQUE
+  // ─────────────────────────────────────────────
 
-  /// Démarre la session de navigation.
-  /// [destinationText] : "Boulangerie", "Gare", etc.
-  void startNavigation(String destinationText) async {
+  /// Démarre la navigation vers [destinationText].
+  /// 1. Géocode via Nominatim
+  /// 2. Récupère itinéraire piéton via OSRM
+  /// 3. Charge les waypoints dans RouteManager
+  /// 4. Connecte la canne Bluetooth
+  Future<void> startNavigation(String destinationText) async {
     isNavigating = true;
-    await _audioGuidance.speak("Calcul de l'itinéraire vers $destinationText...");
+    await _audioGuidance.speak(
+        "Calcul de l'itinéraire vers $destinationText.");
 
-    // 1. APPEL BACKEND (RÉEL)
     try {
-      // Position actuelle pour l'itinéraire
-      Position position = await Geolocator.getCurrentPosition(
+      // 1. Position actuelle
+      final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.best,
       );
 
-      final response = await _apiService.getRoute(
+      // 2. Géocodage + Routing (Nominatim + OSRM) – directs depuis Flutter
+      final route = await _mapsService.getRouteFromText(
         destination: destinationText,
         originLat: position.latitude,
-        originLng: position.longitude
+        originLng: position.longitude,
       );
-      
-      // Note: _processResponse throw déjà une exception si != 200, donc ici on a forcément un succès ou Json
-      // Mais on vérifie quand même les champs métier
 
-      // Parsing des Waypoints
-      if (response['route'] != null && response['route']['steps'] != null) {
-        List<dynamic> steps = response['route']['steps'];
+      if (route == null) {
+        await _audioGuidance.speak(
+            "Impossible de calculer l'itinéraire. Vérifiez votre connexion.");
+        isNavigating = false;
+        return;
+      }
 
-        List<Waypoint> route = steps.map((step) {
+      // 3. Charger les waypoints
+      if (route.steps.isNotEmpty) {
+        final waypoints = route.steps.map((step) {
           return Waypoint(
-            lat: (step['start_location']['lat'] as num).toDouble(),
-            lon: (step['start_location']['lng'] as num).toDouble(),
-            instruction: step['instruction'] ?? "",
+            lat: step.startLocation.lat,
+            lon: step.startLocation.lng,
+            instruction: step.instruction,
           );
         }).toList();
 
-        // Ajouter le dernier point (destination)
-        if (steps.isNotEmpty) {
-          var last = steps.last['end_location'];
-          route.add(Waypoint(
-            lat: (last['lat'] as num).toDouble(),
-            lon: (last['lng'] as num).toDouble(),
-            instruction: "Vous êtes arrivé à destination",
-          ));
-        }
+        // Ajouter le dernier point (destination finale)
+        final lastStep = route.steps.last;
+        waypoints.add(Waypoint(
+          lat: lastStep.endLocation.lat,
+          lon: lastStep.endLocation.lng,
+          instruction: "Vous êtes arrivé à destination",
+        ));
 
-        _routeManager.setRoute(route);
-        await _audioGuidance.speak(
-            "Itinéraire chargé avec ${route.length} points.");
-        } else {
-          await _audioGuidance.speak(
-              "Itinéraire reçu mais sans étapes exploitables.");
-        }
+        _routeManager.setRoute(waypoints);
 
-
-    } catch (e) {
-      print("Erreur Backend: $e");
-      String errorMsg = "Erreur de connexion.";
-      if (e is ApiException) {
-         errorMsg = e.message;
+        // Message vocal d'intro
+        final intro = _mapsService.generateVoiceIntro(route);
+        await _audioGuidance.speak(intro);
+      } else {
+        await _audioGuidance.speak("Itinéraire reçu sans étapes exploitables.");
       }
-      await _audioGuidance.speak("$errorMsg Navigation impossible.");
+    } catch (e) {
+      print("Erreur navigation: $e");
+      await _audioGuidance.speak(
+          "Erreur lors du calcul de l'itinéraire. Navigation impossible.");
       isNavigating = false;
       return;
     }
- 
 
-    await _audioGuidance.speak("Connexion à la canne en cours...");
+    // 4. Connexion Bluetooth (canne)
+    await _audioGuidance.speak("Connexion à la canne en cours.");
     await Future.delayed(const Duration(milliseconds: 800));
- 
-    // 2. Connexion au Bluetooth (Cane)
+
     if (!_bleService.isConnected) {
-         
-        await _bleService.connect();
+      await _bleService.connect();
     }
-    
-    // 3. Inscription au flux de données
+
+    // 5. Écoute des données capteurs
     _bleService.sensorStream.listen((sensorData) {
       if (!isNavigating) return;
       _processSensorData(sensorData);
@@ -125,49 +125,45 @@ class NavigationController {
   /// Arrête la navigation.
   void stopNavigation() {
     isNavigating = false;
-    _bleService.dispose(); 
+    _bleService.dispose();
     _audioGuidance.stop();
   }
 
-  // --- LOGIQUE METIER (CŒUR DU SYSTÈME) ---
+  // ─────────────────────────────────────────────
+  // TRAITEMENT CAPTEURS (cœur du système)
+  // ─────────────────────────────────────────────
 
-  /// Boucle principale de navigation (1Hz - 10Hz selon capteurs).
+  /// Boucle principale de navigation (1Hz–10Hz selon données capteurs).
   void _processSensorData(SensorData data) {
-    if (_routeManager.isFinished) return; // Sécurité
+    if (_routeManager.isFinished) return;
 
-    // 1. Mise à jour de la progression sur l'itinéraire
-    // On utilise le GPS DE LA CANNE (data.lat/lon)
-    bool waypointChanged = _routeManager.updateProgress(data.lat, data.lon);
-    
+    // 1. Mise à jour progression GPS
+    final waypointChanged = _routeManager.updateProgress(data.lat, data.lon);
+
     if (waypointChanged) {
-       // Feedback sonore simple pour dire "point validé"
-       // _audioGuidance.playDing(); // TODO: Ajouter son
-       print("Point de passage validé.");
+      print("Point de passage validé.");
     }
 
-    // 2. Récupération de la cible immédiate (Prochain Waypoint)
-    double distance = _routeManager.getDistanceToNext(data.lat, data.lon);
-    double bearing = _routeManager.getBearingToNext(data.lat, data.lon);
+    // 2. Distances et cap vers prochain waypoint
+    final distance = _routeManager.getDistanceToNext(data.lat, data.lon);
+    final bearing = _routeManager.getBearingToNext(data.lat, data.lon);
 
-    // 3. Appel au Système Expert
-    // Il gère la fusion : Obstacles (Ultrasons) + Cap (IMU) + Consigne GPS (Distance/Bearing)
-    ExpertAction action = _expert.evaluate(
-      sensor: data, 
-      distToDestination: distance, 
-      bearingToDestination: bearing
+    // 3. Système expert (fusion obstacles + IMU + GPS)
+    final action = _expert.evaluate(
+      sensor: data,
+      distToDestination: distance,
+      bearingToDestination: bearing,
     );
 
-    // 4. Feedback Vocal
+    // 4. Feedback vocal
     if (action.instruction.isNotEmpty) {
-      // On prononce l'instruction.
-      // force=true si c'est une urgence (ex: obstacle).
       _audioGuidance.speak(action.instruction, force: action.isPriority);
-      _instructionController.add(action.instruction); // Mise à jour UI
+      _instructionController.add(action.instruction);
     }
-    
-    // 5. Gestion de l'arrivée finale
+
+    // 5. Détection arrivée
     if (_routeManager.isFinished) {
-      String msg = "Vous êtes arrivé à destination. Félicitations !";
+      const msg = "Vous êtes arrivé à destination. Félicitations !";
       _audioGuidance.speak(msg);
       _instructionController.add(msg);
       stopNavigation();

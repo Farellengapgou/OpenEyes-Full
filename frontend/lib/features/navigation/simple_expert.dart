@@ -1,4 +1,3 @@
-import 'package:geolocator/geolocator.dart'; // Pour les calculs de distance si besoin
 import '../../features/detection/obstacle_analyzer.dart'; // Notre logique de détection
 import 'sensor_data.dart'; // Les données capteurs
 

@@ -9,26 +9,26 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  
-  # HTTP requests
+
+  # HTTP requests (Nominatim geocoding + OSRM routing – directs depuis Flutter)
   http: ^1.1.0
-  
+
   # GPS location
   geolocator: ^10.1.0
-  
+
   # Text-to-Speech (vocal)
   flutter_tts: ^4.0.2
-  
-  # Audio recording
-  record: ^5.0.4
-  
+
+  # ✅ STT local natif (remplace Whisper Python backend)
+  speech_to_text: ^6.6.0
+
   # File system
   path_provider: ^2.1.1
-  
-  # Permissions
+
+  # Permissions (micro + localisation)
   permission_handler: ^11.0.1
 
-  # 🔵 Bluetooth (AJOUT OBLIGATOIRE)
+  # 🔵 Bluetooth (canne intelligente)
   flutter_blue_plus: ^1.31.16
 
 dev_dependencies:
@@ -36,10 +36,6 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^3.0.0
   mocktail: ^1.0.4
-
-# ✅ FIX compatibilité record
-dependency_overrides:
-  record_platform_interface: 1.2.0
 
 flutter:
   uses-material-design: true

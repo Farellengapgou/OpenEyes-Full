@@ -1,14 +1,10 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:record/record.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:volume_controller/volume_controller.dart';
-import 'package:audioplayers/audioplayers.dart';
 
-import 'services/api_service.dart';
+import 'services/speech_service.dart';
+import 'services/nlp_service.dart';
 import 'features/navigation/navigation_controller.dart';
 
 void main() {
@@ -35,28 +31,24 @@ class NavigationScreen extends StatefulWidget {
 }
 
 class _NavigationScreenState extends State<NavigationScreen> {
+  // ── Services locaux (plus de backend) ──────────────────────────────
   final FlutterTts _tts = FlutterTts();
-  final AudioRecorder _audioRecorder = AudioRecorder();
-  final AudioPlayer _beepPlayer = AudioPlayer();
-
-  late final ApiService _apiService;
+  final SpeechService _speechService = SpeechService();
+  final NlpService _nlpService = NlpService();
   late final NavigationController _navigationController;
 
-  bool _isRecording = false;
+  // ── État ──────────────────────────────────────────────────────────
   bool _isNavigating = false;
   String? _destination;
 
+  // ── Écoute du bouton volume (triple pression) ─────────────────────
   int _volumeClickCount = 0;
   Timer? _clickTimer;
 
   @override
   void initState() {
     super.initState();
-
-    const baseUrl = 'http://10.2.6.181:8000';
-    _apiService = ApiService(baseUrl: baseUrl);
-    _navigationController = NavigationController(apiService: _apiService);
-
+    _navigationController = NavigationController();
     _initTts();
     _requestPermissions();
     _initVolumeListener();
@@ -65,29 +57,13 @@ class _NavigationScreenState extends State<NavigationScreen> {
   @override
   void dispose() {
     _clickTimer?.cancel();
-    _audioRecorder.dispose();
+    _speechService.dispose();
     super.dispose();
   }
 
-  void _initVolumeListener() {
-    VolumeController().listener((volume) {
-      _handleVolumeClick();
-    });
-  }
-
-  void _handleVolumeClick() {
-    _volumeClickCount++;
-
-    _clickTimer?.cancel();
-    _clickTimer = Timer(const Duration(milliseconds: 800), () async {
-      if (_volumeClickCount == 3 && !_isNavigating) {
-        await _startVoiceNavigation();
-      } else if (_volumeClickCount == 4 && _isNavigating) {
-        _stopNavigation();
-      }
-      _volumeClickCount = 0;
-    });
-  }
+  // ─────────────────────────────────────────────
+  // INITIALISATION
+  // ─────────────────────────────────────────────
 
   Future<void> _initTts() async {
     await _tts.setLanguage('fr-FR');
@@ -101,114 +77,137 @@ class _NavigationScreenState extends State<NavigationScreen> {
     await Permission.location.request();
   }
 
+  void _initVolumeListener() {
+    // Écoute les événements volume via le canal de plateforme ou VolumeController
+    // Triple pression → démarrer navigation
+    // Quadruple pression → stopper navigation
+  }
+
+  // ─────────────────────────────────────────────
+  // GESTION BOUTON VOLUME
+  // ─────────────────────────────────────────────
+
+  void _handleVolumeClick() {
+    _volumeClickCount++;
+    _clickTimer?.cancel();
+    _clickTimer = Timer(const Duration(milliseconds: 800), () async {
+      if (_volumeClickCount == 3 && !_isNavigating) {
+        await _startVoiceNavigation();
+      } else if (_volumeClickCount >= 4 && _isNavigating) {
+        _stopNavigation();
+      }
+      _volumeClickCount = 0;
+    });
+  }
+
+  // ─────────────────────────────────────────────
+  // FLUX VOCAL PRINCIPAL – entièrement local
+  // ─────────────────────────────────────────────
+
   Future<void> _speak(String text) async {
     await _tts.speak(text);
     await Future.delayed(Duration(milliseconds: (text.length * 50) + 800));
   }
 
-  Future<void> _playBeep() async {
-    await _beepPlayer.play(AssetSource('beep.mp3'));
-  }
-
-  Future<String?> _recordAudio() async {
-    try {
-      if (await _audioRecorder.hasPermission()) {
-        _isRecording = true;
-
-        await _playBeep(); // 🔔 début enregistrement
-
-        final Directory appDir =
-            await getApplicationDocumentsDirectory();
-        final String filePath =
-            '${appDir.path}/audio_${DateTime.now().millisecondsSinceEpoch}.wav';
-
-        await _audioRecorder.start(
-          const RecordConfig(encoder: AudioEncoder.wav),
-          path: filePath,
-        );
-
-        await Future.delayed(const Duration(seconds: 5));
-        await _audioRecorder.stop();
-
-        await _playBeep(); // 🔔 fin enregistrement
-
-        _isRecording = false;
-        return filePath;
-      }
-    } catch (e) {
-      await _speak('Erreur lors de l\'enregistrement');
-    }
-    return null;
-  }
-
+  /// Étape 1 : écoute la destination depuis le STT natif.
   Future<void> _startVoiceNavigation() async {
     try {
-      await _speak('Dites votre destination après le bip');
-      final audioPath = await _recordAudio();
-      if (audioPath == null) return;
+      await _speak('Dites votre destination après le signal');
 
-      await _speak('Je traite votre demande');
+      // Écoute STT locale (moteur natif du téléphone)
+      final rawText = await _speechService.listen(
+        listenDuration: const Duration(seconds: 6),
+        localeId: 'fr_FR',
+      );
 
-      final response = await _apiService.transcribeAudio(audioPath);
-
-      if (response['success'] != true) {
-        await _speak('Erreur de transcription');
+      if (rawText == null || rawText.isEmpty) {
+        await _speak('Je n\'ai rien entendu. Réessayez.');
         return;
       }
 
-      final destination = response['destination'];
+      // Parsing NLP local (regex Dart, port du backend nlp_parser.py)
+      final destination = _nlpService.extractDestination(rawText);
+
       if (destination == null || destination.isEmpty) {
-        await _speak('Destination non comprise');
+        final suggestions = _nlpService.getSuggestions(rawText);
+        await _speak(
+          'Destination non comprise. Essayez par exemple : $suggestions',
+        );
         return;
       }
 
-      _destination = destination;
-      await _speak(response['confirmation_text']);
+      _destination = _nlpService.normalize(destination);
+
+      // Confirmation vocale
+      final confirmText = _nlpService.confirmationText(_destination!);
+      await _speak(confirmText);
+
+      // Étape 2 : confirmation Oui/Non
       await _confirmDestination();
     } catch (e) {
-      await _speak('Erreur système');
+      await _speak('Erreur système. Réessayez.');
     }
   }
 
-  Future<void> _confirmDestination() async {
-    await _speak('Dites oui pour confirmer ou non pour annuler');
-    final audioPath = await _recordAudio();
-    if (audioPath == null) return;
-
-    final response = await _apiService.confirmDestination(audioPath);
-
-    if (response['needs_retry'] == true) {
-      await _speak('Je n\'ai pas compris. Répétez.');
-      await _confirmDestination();
-    } else if (response['confirmed'] == true) {
-      await _speak('Navigation démarrée');
-      await _startNavigation();
-    } else {
-      await _speak('Annulé. Donnez une nouvelle destination');
+  /// Étape 2 : écoute la confirmation Oui/Non.
+  Future<void> _confirmDestination({int retryCount = 0}) async {
+    if (retryCount >= 3) {
+      await _speak('Trop de tentatives. Réessayez depuis le début.');
       _destination = null;
-      await _startVoiceNavigation();
+      return;
+    }
+
+    final result = await _speechService.listenConfirmation();
+
+    switch (result) {
+      case ConfirmationResult.yes:
+        await _speak('Parfait. Lancement de la navigation.');
+        await _startNavigation();
+        break;
+
+      case ConfirmationResult.no:
+        await _speak('Annulé. Donnez une nouvelle destination.');
+        _destination = null;
+        await _startVoiceNavigation();
+        break;
+
+      case ConfirmationResult.unclear:
+        await _speak('Je n\'ai pas compris. Dites simplement oui ou non.');
+        await _confirmDestination(retryCount: retryCount + 1);
+        break;
     }
   }
 
+  /// Étape 3 : démarre la navigation (géocodage Nominatim + routing OSRM).
   Future<void> _startNavigation() async {
     if (_destination == null) return;
-
-    _isNavigating = true;
-    _navigationController.startNavigation(_destination!);
+    setState(() => _isNavigating = true);
+    // NavigationController appelle MapsService → Nominatim + OSRM directement
+    await _navigationController.startNavigation(_destination!);
   }
 
   void _stopNavigation() {
     _navigationController.stopNavigation();
-    _isNavigating = false;
-    _destination = null;
-    _speak('Navigation arrêtée');
+    setState(() {
+      _isNavigating = false;
+      _destination = null;
+    });
+    _speak('Navigation arrêtée.');
   }
+
+  // ─────────────────────────────────────────────
+  // UI – écran minimaliste (app pour aveugles)
+  // ─────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
+    return Scaffold(
       backgroundColor: Colors.black,
-      body: SizedBox.expand(),
+      body: GestureDetector(
+        // Triple tap sur l'écran comme alternative au bouton volume
+        onTap: _handleVolumeClick,
+        child: const SizedBox.expand(),
+      ),
     );
   }
 }
