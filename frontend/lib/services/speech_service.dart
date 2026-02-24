@@ -22,36 +22,52 @@ class SpeechService {
   /// Lance une écoute et retourne le texte transcrit.
   /// Retourne null si rien n'est capturé ou si une erreur survient.
   Future<String?> listen({
-    Duration listenDuration = const Duration(seconds: 6),
+    Duration listenDuration = const Duration(seconds: 8),
     String localeId = 'fr_FR',
   }) async {
+    // Toujours réinitialiser si nécessaire
     if (!_isInitialized) {
       final ok = await initialize();
       if (!ok) return null;
     }
 
-    if (!await _speech.hasPermission) return null;
-
+    // On ne bloque plus sur hasPermission (requis séparément via permission_handler)
     final completer = Completer<String?>();
 
+    // Petit délai réduit pour s'assurer que le TTS a fini (le délai principal est géré dans main.dart)
+    await Future.delayed(const Duration(milliseconds: 100));
+
+    print("STT: Starting to listen... (locale: $localeId)");
+    
+    // Définir un statusListener temporaire pour ce call
+    _speech.statusListener = (status) {
+      print("STT Runtime Status: $status");
+      if ((status == 'done' || status == 'notListening') && !completer.isCompleted) {
+        // Si le moteur s'arrête sans avoir envoyé de résultat final
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (!completer.isCompleted) completer.complete(null);
+        });
+      }
+    };
     _speech.listen(
       onResult: (val) {
+        print("STT Result: ${val.recognizedWords} (final: ${val.finalResult})");
         if (val.finalResult && !completer.isCompleted) {
           completer.complete(val.recognizedWords);
         }
       },
       listenFor: listenDuration,
-      pauseFor: const Duration(seconds: 2),
+      pauseFor: const Duration(seconds: 4), // 4s de silence avant d'arrêter
       localeId: localeId,
       listenOptions: stt.SpeechListenOptions(
         cancelOnError: false,
-        partialResults: false,
+        partialResults: true, // permet de recevoir des résultats partiels
       ),
     );
 
     // Attendre la fin d'écoute (résultat final ou timeout)
     final result = await completer.future.timeout(
-      listenDuration + const Duration(seconds: 3),
+      listenDuration + const Duration(seconds: 5),
       onTimeout: () {
         _speech.stop();
         return null;

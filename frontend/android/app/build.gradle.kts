@@ -24,7 +24,7 @@ android {
         applicationId = "com.example.blind_navigation"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = 21  // ✅ Requis: speech_to_text (STT) + flutter_blue_plus (BLE)
+        minSdk = flutter.minSdkVersion  // ✅ Requis: speech_to_text (STT) + flutter_blue_plus (BLE)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

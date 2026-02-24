@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -52,6 +53,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
     _initTts();
     _requestPermissions();
     _initVolumeListener();
+    // Pré-initialiser le STT pour éviter le délai à la première utilisation
+    _speechService.initialize();
   }
 
   @override
@@ -78,9 +81,13 @@ class _NavigationScreenState extends State<NavigationScreen> {
   }
 
   void _initVolumeListener() {
-    // Écoute les événements volume via le canal de plateforme ou VolumeController
-    // Triple pression → démarrer navigation
-    // Quadruple pression → stopper navigation
+    // Écoute les pressions sur les boutons volume (haut ET bas) via EventChannel Android
+    const EventChannel volumeChannel = EventChannel('com.openeyes/volume');
+    volumeChannel.receiveBroadcastStream().listen((event) {
+      if (event == 'volume_press') {
+        _handleVolumeClick();
+      }
+    });
   }
 
   // ─────────────────────────────────────────────
@@ -104,21 +111,45 @@ class _NavigationScreenState extends State<NavigationScreen> {
   // FLUX VOCAL PRINCIPAL – entièrement local
   // ─────────────────────────────────────────────
 
-  Future<void> _speak(String text) async {
+  /// Parle et attend VRAIMENT la fin de la parole avant de retourner.
+  /// Utilise setCompletionHandler + Completer — plus fiable que awaitSpeakCompletion.
+  Future<void> _speak(String text, {Duration postDelay = const Duration(milliseconds: 1000)}) async {
+    print("TTS: Speaking '$text'...");
+    final completer = Completer<void>();
+    _tts.setCompletionHandler(() {
+      print("TTS: Completion handler triggered for '$text'");
+      if (!completer.isCompleted) completer.complete();
+    });
+    // Fallback : si le handler ne se déclenche jamais (bug TTS), on timeout après 15s
     await _tts.speak(text);
-    await Future.delayed(Duration(milliseconds: (text.length * 50) + 800));
+    await completer.future.timeout(
+      const Duration(seconds: 15),
+      onTimeout: () {},
+    );
+    // Pause pour laisser le son du haut-parleur se dissiper avant d'ouvrir le micro
+    if (postDelay > Duration.zero) {
+      await Future.delayed(postDelay);
+    }
   }
 
   /// Étape 1 : écoute la destination depuis le STT natif.
   Future<void> _startVoiceNavigation() async {
     try {
-      await _speak('Dites votre destination après le signal');
+      // Latence réduite entre l'instruction et le Bip
+      await _speak('Dites votre destination après le signal', postDelay: const Duration(milliseconds: 100));
+      
+      // Signal sonore vocal pour qu'il sache QUAND parler
+      await _speak('Bip', postDelay: const Duration(milliseconds: 800));
+
+      print("DEBUG: Vocal prompt finished, opening STT...");
+      // Le _speak() ci-dessus garantit déjà que le TTS est terminé + 1s de silence
 
       // Écoute STT locale (moteur natif du téléphone)
       final rawText = await _speechService.listen(
-        listenDuration: const Duration(seconds: 6),
+        listenDuration: const Duration(seconds: 8),
         localeId: 'fr_FR',
       );
+      print("DEBUG: STT result received: '$rawText'");
 
       if (rawText == null || rawText.isEmpty) {
         await _speak('Je n\'ai rien entendu. Réessayez.');

@@ -29,7 +29,7 @@ dependencies:
   permission_handler: ^11.0.1
 
   # 🔵 Bluetooth (canne intelligente)
-  flutter_blue_plus: ^2.0.0
+  flutter_blue_plus: ^1.32.12
 
 dev_dependencies:
   flutter_test:
