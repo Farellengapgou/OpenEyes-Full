@@ -57,29 +57,53 @@ class BleService {
   // --- MÉTHODES ---
 
   /// Lance le scan et tente de se connecter automatiquement au device cible.
+  /// Attends que la connexion soit établie ou qu'un timeout survienne.
   Future<void> connect() async {
+    final Completer<void> completer = Completer<void>();
+    StreamSubscription? scanSubscription;
 
-    FlutterBluePlus.scanResults.listen((results) async {
+    scanSubscription = FlutterBluePlus.scanResults.listen((results) async {
       for (ScanResult r in results) {
-
         final name = r.advertisementData.advName;
         if (name.isEmpty) continue;
 
-        print("🔍 Trouvé : $name");
-
         if (name == TARGET_DEVICE_NAME) {
-          print("✅ OPEN-EYES détecté !");
+          print("✅ OPEN-EYES détecté ! Arrêt du scan et connexion...");
           await FlutterBluePlus.stopScan();
-          await _connectToDevice(r.device);
+          scanSubscription?.cancel();
+          
+          try {
+            await _connectToDevice(r.device);
+            if (!completer.isCompleted) completer.complete();
+          } catch (e) {
+            print("Erreur de connexion pendant le scan: $e");
+            if (!completer.isCompleted) completer.completeError(e);
+          }
           return;
         }
       }
     });
 
-    await FlutterBluePlus.startScan(
-      timeout: const Duration(seconds: 15),
-    );
-}
+    try {
+      await FlutterBluePlus.startScan(
+        timeout: const Duration(seconds: 15),
+      );
+      
+      // Si au bout de 15s (timeout du scan) on n'a rien trouvé, on libère le completer
+      Future.delayed(const Duration(seconds: 16), () {
+        if (!completer.isCompleted) {
+          scanSubscription?.cancel();
+          completer.complete(); 
+        }
+      });
+
+      return completer.future;
+    } catch (e) {
+      scanSubscription?.cancel();
+      print("Erreur au lancement du scan BLE: $e");
+      rethrow;
+    }
+  }
 
 
   /// Gère la connexion technique et la découverte des services UART/Custom.
@@ -159,15 +183,36 @@ class BleService {
     // Activation de la notification.
     await characteristic.setNotifyValue(true);
     
-    // Écoute du flux de données.
-    characteristic.lastValueStream.listen(callback);
+    // Écoute du flux de données (Notifications).
+    // .onValueReceived est préférable pour les flux de données continus.
+    characteristic.onValueReceived.listen(callback);
+    print("📡 Écoute active sur la caractéristique $uuid");
+  }
+
+  /// Helper pour logger proprement la réception de données.
+  void _printDebugInfo(String sensorName, List<int> bytes) {
+    if (bytes.isEmpty) {
+      print("BLE [$sensorName] ℹ️ Paquet vide reçu (0 bytes)");
+      return;
+    }
+    
+    String hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
+    String decoded = "???";
+    try {
+      decoded = utf8.decode(bytes).trim();
+    } catch (_) {}
+
+    print("BLE [$sensorName] 📥 REÇU: $hex | TEXTE: '$decoded' (${bytes.length} bytes)");
   }
   
   /// Callback appelé quand des données GPS arrivent.
   /// Format ESP32 : {"latitude": 12.34, "longitude": 56.78, ...}
   void _onGpsData(List<int> bytes) {
+    _printDebugInfo("GPS", bytes);
     try {
-      String jsonString = utf8.decode(bytes);
+      String jsonString = utf8.decode(bytes).trim();
+      if (jsonString.isEmpty || !jsonString.startsWith('{')) return;
+      
       Map<String, dynamic> json = jsonDecode(jsonString);
       
       _latestLat = (json['latitude'] as num?)?.toDouble() ?? _latestLat;
@@ -183,8 +228,11 @@ class BleService {
   /// Callback appelé quand des données du capteur d'eau arrivent.
   /// Format ESP32 : {"humidityLevel": 45.5, "rawData": 1024}
   void _onWaterData(List<int> bytes) {
+    _printDebugInfo("EAU", bytes);
     try {
-      String jsonString = utf8.decode(bytes);
+      String jsonString = utf8.decode(bytes).trim();
+      if (jsonString.isEmpty || !jsonString.startsWith('{')) return;
+      
       Map<String, dynamic> json = jsonDecode(jsonString);
       
       // Interprétation : si humidité > 30% (seuil arbitraire à ajuster), on considère qu'Il y a de l'eau
@@ -204,8 +252,11 @@ class BleService {
   /// Format ESP32 : {"upper": 120, "lower": 50, "servoAngle": 90}
   /// Note: Les capteurs renvoient des cm. On convertit en mètres.
   void _onObstacleData(List<int> bytes) {
+    _printDebugInfo("OBSTACLE", bytes);
     try {
-      String jsonString = utf8.decode(bytes);
+      String jsonString = utf8.decode(bytes).trim();
+      if (jsonString.isEmpty || !jsonString.startsWith('{')) return;
+      
       Map<String, dynamic> json = jsonDecode(jsonString);
       
       double lowerCm = (json['lower'] as num?)?.toDouble() ?? 9999.0;
@@ -214,11 +265,6 @@ class BleService {
       
       double distMeters = lowerCm / 100.0; // Conversion cm -> m
       _latestObstacleUp = upperCm / 100.0;
-      
-      // Catégorisation par secteur (mapping Servo)
-      // < 60° : GAUCHE (selon ObstacleDetector.cpp : angleActuel < 60 ? "GAUCHE")
-      // > 120° : DROITE (selon ObstacleDetector.cpp : angleActuel > 120 ? "DROITE")
-      // Sinon : CENTRE
       
       if (angle < 60) {
         _latestDistLeft = distMeters;
@@ -237,8 +283,11 @@ class BleService {
   /// Callback appelé quand des données IMU arrivent.
   /// Format ESP32 : {"yaw": 10.5, "pitch": 5.0, "roll": 2.0}
   void _onImuData(List<int> bytes) {
+    _printDebugInfo("IMU", bytes);
     try {
-      String jsonString = utf8.decode(bytes);
+      String jsonString = utf8.decode(bytes).trim();
+      if (jsonString.isEmpty || !jsonString.startsWith('{')) return;
+      
       Map<String, dynamic> json = jsonDecode(jsonString);
       
       _latestHeading = (json['yaw'] as num?)?.toDouble() ?? _latestHeading;
@@ -251,11 +300,17 @@ class BleService {
   
   /// Émet un objet SensorData complet en fusionnant toutes les dernières valeurs.
   void _emitSensorData() {
+    // On n'empêche plus l'émission si les coordonnées sont à 0,0,
+    // car on veut au moins que les obstacles et l'IMU fonctionnent.
+    if (_latestLat == 0.0 && _latestLon == 0.0) {
+      print("⏳ Données canne reçues, mais en attente d'un fix GPS valide...");
+    }
+
     SensorData data = SensorData(
       lat: _latestLat,
       lon: _latestLon,
       heading: _latestHeading,
-      frontDistance: _latestDistCenter, // Le "Centre" est considéré comme le front principal
+      frontDistance: _latestDistCenter,
       leftDistance: _latestDistLeft,
       rightDistance: _latestDistRight,
       obstacleUp: _latestObstacleUp,

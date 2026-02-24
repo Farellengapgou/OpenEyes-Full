@@ -22,6 +22,7 @@ class NavigationController {
   bool isNavigating = false;
   StreamSubscription? _bleSubscription;
   StreamSubscription? _gpsSubscription;
+  Timer? _watchdog;
 
   // Stream pour mettre à jour l'UI
   final StreamController<String> _instructionController =
@@ -125,25 +126,45 @@ class NavigationController {
 
     if (bleConnected) {
       await _audioGuidance.speak("Canne connectée.");
+      
+      // --- WATCHDOG : Fallback si la canne est muette ---
+      bool dataReceived = false;
+      _watchdog?.cancel();
+      _watchdog = Timer(const Duration(seconds: 15), () async {
+        if (!dataReceived && isNavigating) {
+          await _audioGuidance.speak("La canne ne répond pas. Passage sur GPS téléphone.");
+          _startGpsFallback();
+        }
+      });
+
       _bleSubscription = _bleService.sensorStream.listen((sensorData) {
         if (!isNavigating) return;
+        if (!dataReceived) {
+          dataReceived = true;
+          _watchdog?.cancel();
+          print("📡 Première donnée canne reçue. Watchdog annulé.");
+        }
         _processSensorData(sensorData);
       });
     } else {
-      await _audioGuidance.speak(
-          "Canne non détectée. Navigation par GPS téléphone uniquement.");
-      
-      // 5. Fallback GPS Téléphone
-      _gpsSubscription = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.bestForNavigation,
-          distanceFilter: 2, // Mise à jour tous les 2 mètres
-        ),
-      ).listen((Position position) {
-        if (!isNavigating) return;
-        _processPhonePosition(position);
-      });
+      _startGpsFallback();
     }
+  }
+
+  /// Active le flux GPS du téléphone en cas d'absence de canne.
+  Future<void> _startGpsFallback() async {
+    await _audioGuidance.speak("Navigation par GPS téléphone uniquement.");
+    
+    _gpsSubscription?.cancel();
+    _gpsSubscription = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 2, 
+      ),
+    ).listen((Position position) {
+      if (!isNavigating) return;
+      _processPhonePosition(position);
+    });
   }
 
   /// Traite la position du téléphone (fallback sans canne).
@@ -165,6 +186,7 @@ class NavigationController {
   /// Arrête la navigation.
   void stopNavigation() {
     isNavigating = false;
+    _watchdog?.cancel();
     _bleSubscription?.cancel();
     _gpsSubscription?.cancel();
     _bleService.dispose();
