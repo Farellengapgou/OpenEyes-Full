@@ -4,7 +4,7 @@ class NlpService {
   /// Patterns regex pour isoler la destination depuis le texte transcrit.
   static final List<RegExp> _patterns = [
     RegExp(
-      r"(?:aller|vais|veux|voudrais|aimerais)\s+(?:à|au|aux|chez)?\s*(.+)",
+      r"(?:aller|vais|veux|voudrais|aimerais)\s+(?:aller\s+)?(?:à|au|aux|chez)?\s*(.+)",
       caseSensitive: false,
     ),
     RegExp(
@@ -12,14 +12,14 @@ class NlpService {
       caseSensitive: false,
     ),
     RegExp(
-      r"(?:emmène-moi|guide-moi|conduis-moi)\s+(?:à|au|aux)?\s*(.+)",
+      r"(?:emmène|guide|conduis)[-\s]moi\s+(?:à|au|aux)?\s*(.+)",
       caseSensitive: false,
     ),
   ];
 
   /// Mots à ignorer en début de destination.
   static const _stopWords = {
-    'le', 'la', 'les', "l'", 'un', 'une', 'du', 'de', 'des',
+    'le', 'la', 'les', "l'", 'un', 'une', 'du', 'de', 'des', 'je', 'me', 'moi', 'vais', 'veux', 'voudrais', 'aimerais', 'aller', 'à', 'au', 'aux', 'vers'
   };
 
   /// Corrections phonétiques des erreurs de STT fréquentes à Yaoundé.
@@ -52,7 +52,8 @@ class NlpService {
 
     // Appliquer toutes les corrections
     for (final entry in _corrections.entries) {
-      result = result.replaceAll(entry.key, entry.value);
+      // Utilisation de RegExp avec \b (word boundary) pour éviter le sur-remplacement (ex: basto -> bastos)
+      result = result.replaceAll(RegExp('\\b${entry.key}\\b'), entry.value);
     }
 
     // Supprimer ponctuation inutile
