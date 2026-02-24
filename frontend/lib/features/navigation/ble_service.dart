@@ -62,7 +62,7 @@ class BleService {
     FlutterBluePlus.scanResults.listen((results) async {
       for (ScanResult r in results) {
 
-        final name = r.advertisementData.localName;
+        final name = r.advertisementData.advName;
         if (name.isEmpty) continue;
 
         print("🔍 Trouvé : $name");
