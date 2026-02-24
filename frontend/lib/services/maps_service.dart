@@ -219,13 +219,23 @@ class MapsService {
   }
 
   /// Calcule en une seule opération : géocode + route.
+  /// Inclut un fallback sur la phrase complète si l'extraction NLP échoue.
   Future<NavigationRoute?> getRouteFromText({
     required String destination,
+    required String rawInput, // Nouvelle paramètre pour le fallback
     required double originLat,
     required double originLng,
     String cityContext = 'Yaoundé',
   }) async {
-    final coords = await geocodeDestination(destination, cityContext: cityContext);
+    // 1. Essayer avec la destination extraite par le NLP
+    var coords = await geocodeDestination(destination, cityContext: cityContext);
+
+    // 2. Fallback : si échec, essayer avec la phrase brute complète
+    if (coords == null && rawInput != destination) {
+      print("MapsService: Geocoding fallback on raw input: '$rawInput'");
+      coords = await geocodeDestination(rawInput, cityContext: cityContext);
+    }
+
     if (coords == null) return null;
 
     return getDirections(

@@ -136,17 +136,19 @@ class _NavigationScreenState extends State<NavigationScreen> {
   Future<void> _startVoiceNavigation() async {
     try {
       // Latence réduite entre l'instruction et le Bip
-      await _speak('Dites votre destination après le signal', postDelay: const Duration(milliseconds: 100));
+      await _speak('Dites votre destination après le signal', postDelay: const Duration(milliseconds: 50));
       
-      // Signal sonore vocal pour qu'il sache QUAND parler
-      await _speak('Bip', postDelay: const Duration(milliseconds: 800));
+      // Signal sonore vocal (Bip) - On attend un peu plus pour laisser le matériel se calmer
+      await _speak('Bip', postDelay: const Duration(milliseconds: 600));
 
       print("DEBUG: Vocal prompt finished, opening STT...");
-      // Le _speak() ci-dessus garantit déjà que le TTS est terminé + 1s de silence
+
+      // SECURITE : Arrêt explicite du TTS avant d'ouvrir le micro
+      await _tts.stop();
 
       // Écoute STT locale (moteur natif du téléphone)
       final rawText = await _speechService.listen(
-        listenDuration: const Duration(seconds: 8),
+        listenDuration: const Duration(seconds: 10),
         localeId: 'fr_FR',
       );
       print("DEBUG: STT result received: '$rawText'");
@@ -156,14 +158,11 @@ class _NavigationScreenState extends State<NavigationScreen> {
         return;
       }
 
-      // Parsing NLP local (regex Dart, port du backend nlp_parser.py)
+      // Parsing NLP local (flexible : accepte mono-mot et fallback complet)
       final destination = _nlpService.extractDestination(rawText);
 
       if (destination == null || destination.isEmpty) {
-        final suggestions = _nlpService.getSuggestions(rawText);
-        await _speak(
-          'Destination non comprise. Essayez par exemple : $suggestions',
-        );
+        await _speak('Je n\'ai pas compris. Dites simplement le nom du lieu.');
         return;
       }
 
@@ -173,15 +172,16 @@ class _NavigationScreenState extends State<NavigationScreen> {
       final confirmText = _nlpService.confirmationText(_destination!);
       await _speak(confirmText);
 
-      // Étape 2 : confirmation Oui/Non
-      await _confirmDestination();
+      // Étape 2 : confirmation Oui/Non (on passe aussi le texte brut pour le fallback au cas où)
+      await _confirmDestination(rawText: rawText);
     } catch (e) {
+      print("Error in _startVoiceNavigation: $e");
       await _speak('Erreur système. Réessayez.');
     }
   }
 
   /// Étape 2 : écoute la confirmation Oui/Non.
-  Future<void> _confirmDestination({int retryCount = 0}) async {
+  Future<void> _confirmDestination({int retryCount = 0, String? rawText}) async {
     if (retryCount >= 3) {
       await _speak('Trop de tentatives. Réessayez depuis le début.');
       _destination = null;
@@ -193,7 +193,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
     switch (result) {
       case ConfirmationResult.yes:
         await _speak('Parfait. Lancement de la navigation.');
-        await _startNavigation();
+        await _startNavigation(rawTranscription: rawText);
         break;
 
       case ConfirmationResult.no:
@@ -204,17 +204,17 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
       case ConfirmationResult.unclear:
         await _speak('Je n\'ai pas compris. Dites simplement oui ou non.');
-        await _confirmDestination(retryCount: retryCount + 1);
+        await _confirmDestination(retryCount: retryCount + 1, rawText: rawText);
         break;
     }
   }
 
   /// Étape 3 : démarre la navigation (géocodage Nominatim + routing OSRM).
-  Future<void> _startNavigation() async {
+  Future<void> _startNavigation({String? rawTranscription}) async {
     if (_destination == null) return;
     setState(() => _isNavigating = true);
     // NavigationController appelle MapsService → Nominatim + OSRM directement
-    await _navigationController.startNavigation(_destination!);
+    await _navigationController.startNavigation(_destination!, rawTranscription: rawTranscription);
   }
 
   void _stopNavigation() {

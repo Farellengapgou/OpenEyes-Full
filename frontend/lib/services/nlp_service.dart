@@ -77,7 +77,7 @@ class NlpService {
 
     final text = cleanTranscription(rawText);
 
-    // 1. Essayer les patterns regex
+    // 1. Essayer les patterns regex (ex: "aller à ...")
     for (final pattern in _patterns) {
       final match = pattern.firstMatch(text);
       if (match != null && match.groupCount >= 1) {
@@ -86,14 +86,11 @@ class NlpService {
       }
     }
 
-    // 2. Fallback : 3 derniers mots
-    final words = text.split(' ').where((w) => w.isNotEmpty).toList();
-    if (words.length >= 2) {
-      final lastWords = words.length >= 3
-          ? words.sublist(words.length - 3)
-          : words.sublist(words.length - 2);
-      return _clean(lastWords.join(' '));
-    }
+    // 2. Fallback flexible : 
+    // Si aucun pattern n'a matché, on prend TOUT le texte nettoyé (ex: "Mendong").
+    // Plus besoin de vérifier si words.length >= 2.
+    final candidate = _clean(text);
+    if (candidate.isNotEmpty) return candidate;
 
     return null;
   }

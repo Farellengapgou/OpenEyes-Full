@@ -48,7 +48,7 @@ class NavigationController {
   /// 2. Récupère itinéraire piéton via OSRM
   /// 3. Charge les waypoints dans RouteManager
   /// 4. Connecte la canne Bluetooth
-  Future<void> startNavigation(String destinationText) async {
+  Future<void> startNavigation(String destinationText, {String? rawTranscription}) async {
     isNavigating = true;
     await _audioGuidance.speak(
         "Calcul de l'itinéraire vers $destinationText.");
@@ -62,6 +62,7 @@ class NavigationController {
       // 2. Géocodage + Routing (Nominatim + OSRM) – directs depuis Flutter
       final route = await _mapsService.getRouteFromText(
         destination: destinationText,
+        rawInput: rawTranscription ?? destinationText, // Utilise raw pour le fallback
         originLat: position.latitude,
         originLng: position.longitude,
       );

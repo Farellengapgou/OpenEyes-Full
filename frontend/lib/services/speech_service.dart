@@ -7,6 +7,7 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 class SpeechService {
   final stt.SpeechToText _speech = stt.SpeechToText();
   bool _isInitialized = false;
+  String _lastRecognized = ""; // Stocke les résultats partiels
 
   /// Initialise le moteur STT. À appeler une seule fois au démarrage.
   Future<bool> initialize() async {
@@ -20,61 +21,90 @@ class SpeechService {
   }
 
   /// Lance une écoute et retourne le texte transcrit.
-  /// Retourne null si rien n'est capturé ou si une erreur survient.
   Future<String?> listen({
     Duration listenDuration = const Duration(seconds: 8),
     String localeId = 'fr_FR',
   }) async {
-    // Toujours réinitialiser si nécessaire
+    // 1. Initialisation
     if (!_isInitialized) {
       final ok = await initialize();
       if (!ok) return null;
     }
 
-    // On ne bloque plus sur hasPermission (requis séparément via permission_handler)
-    final completer = Completer<String?>();
-
-    // Petit délai réduit pour s'assurer que le TTS a fini (le délai principal est géré dans main.dart)
-    await Future.delayed(const Duration(milliseconds: 100));
-
-    print("STT: Starting to listen... (locale: $localeId)");
+    // 2. Tentative avec retry interne
+    String? result = await _listenInternal(listenDuration, localeId);
     
-    // Définir un statusListener temporaire pour ce call
+    // Si échec immédiat (null et moins de 1s écoulée), on réessaye une fois après une pause
+    if (result == null) {
+      print("STT: First attempt failed, retrying in 800ms...");
+      await Future.delayed(const Duration(milliseconds: 800));
+      result = await _listenInternal(listenDuration, localeId);
+    }
+
+    return result;
+  }
+
+  /// Logique interne d'écoute avec gestion des arrêts prématurés.
+  Future<String?> _listenInternal(Duration listenDuration, String localeId) async {
+    final completer = Completer<String?>();
+    _lastRecognized = "";
+    final startTime = DateTime.now();
+
+    // Délai de sécurité pour le hardware
+    await Future.delayed(const Duration(milliseconds: 150));
+
+    print("STT: Listening internal start...");
+
     _speech.statusListener = (status) {
-      print("STT Runtime Status: $status");
-      if ((status == 'done' || status == 'notListening') && !completer.isCompleted) {
-        // Si le moteur s'arrête sans avoir envoyé de résultat final
-        Future.delayed(const Duration(milliseconds: 500), () {
-          if (!completer.isCompleted) completer.complete(null);
-        });
+      final elapsed = DateTime.now().difference(startTime).inMilliseconds;
+      print("STT Status ($elapsed ms): $status");
+
+      if ((status == 'done' || status == 'notListening')) {
+        // Si arrêt trop rapide (<700ms) et rien capté, on considère que c'est un bug hardware/focus
+        if (elapsed < 700 && _lastRecognized.isEmpty) {
+          print("STT: Premature stop detected, ignoring for now.");
+          return;
+        }
+
+        if (!completer.isCompleted) {
+          Future.delayed(const Duration(milliseconds: 200), () {
+            if (!completer.isCompleted) {
+              completer.complete(_lastRecognized.isNotEmpty ? _lastRecognized : null);
+            }
+          });
+        }
       }
     };
-    _speech.listen(
-      onResult: (val) {
-        print("STT Result: ${val.recognizedWords} (final: ${val.finalResult})");
-        if (val.finalResult && !completer.isCompleted) {
-          completer.complete(val.recognizedWords);
-        }
-      },
-      listenFor: listenDuration,
-      pauseFor: const Duration(seconds: 4), // 4s de silence avant d'arrêter
-      localeId: localeId,
-      listenOptions: stt.SpeechListenOptions(
-        cancelOnError: false,
-        partialResults: true, // permet de recevoir des résultats partiels
-      ),
-    );
 
-    // Attendre la fin d'écoute (résultat final ou timeout)
-    final result = await completer.future.timeout(
-      listenDuration + const Duration(seconds: 5),
+    try {
+      await _speech.listen(
+        onResult: (val) {
+          _lastRecognized = val.recognizedWords;
+          if (val.finalResult && !completer.isCompleted) {
+            completer.complete(_lastRecognized);
+          }
+        },
+        listenFor: listenDuration,
+        pauseFor: const Duration(seconds: 4),
+        localeId: localeId,
+        listenOptions: stt.SpeechListenOptions(
+          cancelOnError: false,
+          partialResults: true,
+          onDevice: true,
+        ),
+      );
+    } catch (e) {
+      print("STT: listen() error: $e");
+      return null;
+    }
+
+    return await completer.future.timeout(
+      listenDuration + const Duration(seconds: 2),
       onTimeout: () {
         _speech.stop();
-        return null;
+        return _lastRecognized.isNotEmpty ? _lastRecognized : null;
       },
     );
-
-    return (result != null && result.trim().isNotEmpty) ? result.trim() : null;
   }
 
   /// Écoute une confirmation Oui/Non.

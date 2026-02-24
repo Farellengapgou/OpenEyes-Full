@@ -15,7 +15,7 @@ class RouteManager {
   int _currentIndex = 0;
   
   /// Rayon en mètres pour valider le passage d'un waypoint.
-  static const double WAYPOINT_REACH_RADIUS = 10.0; 
+  static const double WAYPOINT_REACH_RADIUS = 15.0; // Augmenté de 10 à 15 pour le Cameroun
   
   /// Rayon pour l'arrivée finale (plus précis).
   static const double FINAL_DESTINATION_RADIUS = 5.0;
