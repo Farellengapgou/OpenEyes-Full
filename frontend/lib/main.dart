@@ -6,6 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import 'services/speech_service.dart';
 import 'services/nlp_service.dart';
+import 'services/maps_service.dart';
 import 'features/navigation/navigation_controller.dart';
 
 void main() {
@@ -36,6 +37,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
   final FlutterTts _tts = FlutterTts();
   final SpeechService _speechService = SpeechService();
   final NlpService _nlpService = NlpService();
+  final MapsService _mapsService = MapsService();
   late final NavigationController _navigationController;
 
   // ── État ──────────────────────────────────────────────────────────
@@ -135,58 +137,77 @@ class _NavigationScreenState extends State<NavigationScreen> {
   /// Étape 1 : écoute la destination depuis le STT natif.
   Future<void> _startVoiceNavigation() async {
     try {
-      // Latence réduite entre l'instruction et le Bip
-      await _speak('Dites votre destination après le signal', postDelay: const Duration(milliseconds: 50));
-      
-      // Signal sonore vocal (Bip) - On attend un peu plus pour laisser le matériel se calmer
-      await _speak('Bip', postDelay: const Duration(milliseconds: 600));
+      await _speak('Dites votre destination maintenant', postDelay: const Duration(milliseconds: 1000));
 
-      print("DEBUG: Vocal prompt finished, opening STT...");
+      print("DEBUG: Preparing STT (ZTE 2s delay)...");
+      // ⏳ Délai crucial validé par l'utilisateur pour le ZTE
+      await Future.delayed(const Duration(seconds: 2));
 
-      // SECURITE : Arrêt explicite du TTS avant d'ouvrir le micro
-      await _tts.stop();
-
-      // Écoute STT locale (moteur natif du téléphone)
+      print("DEBUG: Opening STT...");
       final rawText = await _speechService.listen(
-        listenDuration: const Duration(seconds: 10),
+        listenDuration: const Duration(seconds: 12),
         localeId: 'fr_FR',
       );
-      print("DEBUG: STT result received: '$rawText'");
+      print("DEBUG: STT result: '$rawText'");
 
       if (rawText == null || rawText.isEmpty) {
         await _speak('Je n\'ai rien entendu. Réessayez.');
+        await _startVoiceNavigation(); // RECURSIVE
         return;
       }
 
-      // Parsing NLP local (flexible : accepte mono-mot et fallback complet)
+      // Extraction NLP
       final destination = _nlpService.extractDestination(rawText);
-
       if (destination == null || destination.isEmpty) {
-        await _speak('Je n\'ai pas compris. Dites simplement le nom du lieu.');
+        await _speak('Je n\'ai pas compris la destination. Réessayez.');
+        await _startVoiceNavigation(); // RECURSIVE
         return;
       }
 
       _destination = _nlpService.normalize(destination);
 
-      // Confirmation vocale
+      // 🔍 VALIDATION IMMEDIATE (Évite le blocage Picasso)
+      print("DEBUG: Pre-validating destination: '$_destination'");
+      try {
+        final geocode = await _mapsService.geocodeDestination(_destination!);
+        
+        if (geocode == null) {
+          await _speak('Je n\'ai pas trouvé ce lieu au Cameroun. Pouvez-vous répéter ?');
+          _destination = null;
+          await _startVoiceNavigation(); // RECURSION : On recommence
+          return;
+        }
+      } catch (e) {
+        if (e.toString().contains('SocketException') || e.toString().contains('host lookup')) {
+          await _speak('Erreur de connexion internet. Vérifiez votre réseau puis réessayez.');
+        } else {
+          await _speak('Erreur de recherche. Réessayez.');
+        }
+        return;
+      }
+
+      // Si trouvé, on demande confirmation
       final confirmText = _nlpService.confirmationText(_destination!);
       await _speak(confirmText);
 
-      // Étape 2 : confirmation Oui/Non (on passe aussi le texte brut pour le fallback au cas où)
+      // Étape 2 : confirmation Oui/Non
       await _confirmDestination(rawText: rawText);
     } catch (e) {
-      print("Error in _startVoiceNavigation: $e");
-      await _speak('Erreur système. Réessayez.');
+      print("ERROR in _startVoiceNavigation: $e");
+      await _speak('Erreur système.');
     }
   }
 
   /// Étape 2 : écoute la confirmation Oui/Non.
   Future<void> _confirmDestination({int retryCount = 0, String? rawText}) async {
     if (retryCount >= 3) {
-      await _speak('Trop de tentatives. Réessayez depuis le début.');
+      await _speak('Trop de tentatives. Réessayez plus tard.');
       _destination = null;
       return;
     }
+
+    // Pause de sécurité avant d'écouter la confirmation
+    await Future.delayed(const Duration(milliseconds: 1500));
 
     final result = await _speechService.listenConfirmation();
 
@@ -197,7 +218,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
         break;
 
       case ConfirmationResult.no:
-        await _speak('Annulé. Donnez une nouvelle destination.');
+        await _speak('Annulé. Nouvelle destination ?');
         _destination = null;
         await _startVoiceNavigation();
         break;
@@ -213,7 +234,6 @@ class _NavigationScreenState extends State<NavigationScreen> {
   Future<void> _startNavigation({String? rawTranscription}) async {
     if (_destination == null) return;
     setState(() => _isNavigating = true);
-    // NavigationController appelle MapsService → Nominatim + OSRM directement
     await _navigationController.startNavigation(_destination!, rawTranscription: rawTranscription);
   }
 

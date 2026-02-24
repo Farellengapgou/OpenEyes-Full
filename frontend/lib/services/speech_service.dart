@@ -22,52 +22,57 @@ class SpeechService {
 
   /// Lance une écoute et retourne le texte transcrit.
   Future<String?> listen({
-    Duration listenDuration = const Duration(seconds: 8),
+    Duration listenDuration = const Duration(seconds: 10),
     String localeId = 'fr_FR',
   }) async {
-    // 1. Initialisation
     if (!_isInitialized) {
       final ok = await initialize();
       if (!ok) return null;
     }
 
-    // 2. Tentative avec retry interne
+    // 1ère tentative
+    print("STT: Attempt 1...");
     String? result = await _listenInternal(listenDuration, localeId);
     
-    // Si échec immédiat (null et moins de 1s écoulée), on réessaye une fois après une pause
-    if (result == null) {
-      print("STT: First attempt failed, retrying in 800ms...");
-      await Future.delayed(const Duration(milliseconds: 800));
+    // Si échec (null ou vide), on retente une fois après une pause plus longue
+    if (result == null || result.trim().isEmpty) {
+      print("STT: First attempt failed, retrying in 1200ms...");
+      await Future.delayed(const Duration(milliseconds: 1200));
       result = await _listenInternal(listenDuration, localeId);
     }
 
-    return result;
+    return (result != null && result.trim().isNotEmpty) ? result.trim() : null;
   }
 
-  /// Logique interne d'écoute avec gestion des arrêts prématurés.
+  /// Logique d'écoute protégée contre les arrêts prématurés et conflits client
   Future<String?> _listenInternal(Duration listenDuration, String localeId) async {
+    // SECURITE : On arrête tout avant de commencer pour éviter "error_client"
+    try {
+      await _speech.stop();
+      await _speech.cancel();
+      await Future.delayed(const Duration(milliseconds: 400));
+    } catch (e) {
+      print("STT Cleanup error (ignored): $e");
+    }
+
     final completer = Completer<String?>();
     _lastRecognized = "";
-    final startTime = DateTime.now();
+    final start = DateTime.now();
 
-    // Délai de sécurité pour le hardware
-    await Future.delayed(const Duration(milliseconds: 150));
-
-    print("STT: Listening internal start...");
+    print("STT: _listenInternal start...");
 
     _speech.statusListener = (status) {
-      final elapsed = DateTime.now().difference(startTime).inMilliseconds;
+      final elapsed = DateTime.now().difference(start).inMilliseconds;
       print("STT Status ($elapsed ms): $status");
 
-      if ((status == 'done' || status == 'notListening')) {
-        // Si arrêt trop rapide (<700ms) et rien capté, on considère que c'est un bug hardware/focus
+      if (status == 'done' || status == 'notListening') {
         if (elapsed < 700 && _lastRecognized.isEmpty) {
-          print("STT: Premature stop detected, ignoring for now.");
+          print("STT: Ignoring lightning stop.");
           return;
         }
 
         if (!completer.isCompleted) {
-          Future.delayed(const Duration(milliseconds: 200), () {
+          Future.delayed(const Duration(milliseconds: 400), () {
             if (!completer.isCompleted) {
               completer.complete(_lastRecognized.isNotEmpty ? _lastRecognized : null);
             }
@@ -94,17 +99,20 @@ class SpeechService {
         ),
       );
     } catch (e) {
-      print("STT: listen() error: $e");
-      return null;
+      print("STT: Error in internal listen: $e");
+      if (!completer.isCompleted) completer.complete(null);
     }
 
     return await completer.future.timeout(
-      listenDuration + const Duration(seconds: 2),
+      listenDuration + const Duration(seconds: 3),
       onTimeout: () {
         _speech.stop();
         return _lastRecognized.isNotEmpty ? _lastRecognized : null;
       },
-    );
+    ).catchError((e) {
+      print("STT Timeout/Error catch: $e");
+      return _lastRecognized.isNotEmpty ? _lastRecognized : null;
+    });
   }
 
   /// Écoute une confirmation Oui/Non.
