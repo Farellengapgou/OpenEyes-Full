@@ -20,6 +20,8 @@ class NavigationController {
 
   // --- ÉTAT ---
   bool isNavigating = false;
+  StreamSubscription? _bleSubscription;
+  StreamSubscription? _gpsSubscription;
 
   // Stream pour mettre à jour l'UI
   final StreamController<String> _instructionController =
@@ -109,23 +111,62 @@ class NavigationController {
     }
 
     // 4. Connexion Bluetooth (canne)
-    await _audioGuidance.speak("Connexion à la canne en cours.");
-    await Future.delayed(const Duration(milliseconds: 800));
-
-    if (!_bleService.isConnected) {
-      await _bleService.connect();
+    bool bleConnected = false;
+    try {
+      if (!_bleService.isConnected) {
+        await _audioGuidance.speak("Connexion à la canne...");
+        // Timeout court pour ne pas bloquer si la canne est éteinte
+        await _bleService.connect().timeout(const Duration(seconds: 8));
+      }
+      bleConnected = _bleService.isConnected;
+    } catch (e) {
+      print("BLE Connection failed: $e");
     }
 
-    // 5. Écoute des données capteurs
-    _bleService.sensorStream.listen((sensorData) {
-      if (!isNavigating) return;
-      _processSensorData(sensorData);
-    });
+    if (bleConnected) {
+      await _audioGuidance.speak("Canne connectée.");
+      _bleSubscription = _bleService.sensorStream.listen((sensorData) {
+        if (!isNavigating) return;
+        _processSensorData(sensorData);
+      });
+    } else {
+      await _audioGuidance.speak(
+          "Canne non détectée. Navigation par GPS téléphone uniquement.");
+      
+      // 5. Fallback GPS Téléphone
+      _gpsSubscription = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          distanceFilter: 2, // Mise à jour tous les 2 mètres
+        ),
+      ).listen((Position position) {
+        if (!isNavigating) return;
+        _processPhonePosition(position);
+      });
+    }
+  }
+
+  /// Traite la position du téléphone (fallback sans canne).
+  void _processPhonePosition(Position pos) {
+    // Créer un SensorData minimaliste (juste GPS + Heading)
+    final data = SensorData(
+      lat: pos.latitude,
+      lon: pos.longitude,
+      heading: pos.heading,
+      frontDistance: 99.9, // Pas d'obstacles
+      leftDistance: 99.9,
+      rightDistance: 99.9,
+      obstacleUp: 99.9,
+      water: false,
+    );
+    _processSensorData(data);
   }
 
   /// Arrête la navigation.
   void stopNavigation() {
     isNavigating = false;
+    _bleSubscription?.cancel();
+    _gpsSubscription?.cancel();
     _bleService.dispose();
     _audioGuidance.stop();
   }

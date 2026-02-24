@@ -69,51 +69,68 @@ class MapsService {
   // ─────────────────────────────────────────────
 
   /// Géocode une destination textuelle. Ajoute Yaoundé + Cameroun si absent.
+  /// Inclut une logique de retry pour pallier aux timeouts Nominatim.
   Future<Map<String, dynamic>?> geocodeDestination(
     String destination, {
     String cityContext = 'Yaoundé',
+    int maxRetries = 3,
   }) async {
-    try {
-      var query = destination.trim();
+    int attempts = 0;
+    while (attempts < maxRetries) {
+      attempts++;
+      try {
+        var query = destination.trim();
 
-      if (!query.toLowerCase().contains(cityContext.toLowerCase())) {
-        query += ', $cityContext';
+        if (!query.toLowerCase().contains(cityContext.toLowerCase())) {
+          query += ', $cityContext';
+        }
+        if (!query.toLowerCase().contains('cameroun')) {
+          query += ', Cameroun';
+        }
+
+        final uri = Uri.parse('$_nominatimUrl/search').replace(
+          queryParameters: {
+            'q': query,
+            'format': 'json',
+            'limit': '1',
+            'countrycodes': 'cm',
+            'addressdetails': '1',
+            'accept-language': 'fr',
+          },
+        );
+
+        print('MapsService: Geocoding attempt $attempts for "$query"...');
+        final response = await _client
+            .get(uri, headers: _headers)
+            .timeout(const Duration(seconds: 12));
+
+        if (response.statusCode != 200) {
+          print('MapsService: Geocoding error ${response.statusCode}');
+          if (attempts < maxRetries) continue;
+          return null;
+        }
+
+        final List<dynamic> results = json.decode(response.body);
+        if (results.isEmpty) {
+          print('MapsService: No results for "$query"');
+          return null;
+        }
+
+        final loc = results.first as Map<String, dynamic>;
+        return {
+          'lat': double.parse(loc['lat'].toString()),
+          'lng': double.parse(loc['lon'].toString()),
+          'formatted_address': loc['display_name'] ?? destination,
+          'source': 'nominatim',
+        };
+      } catch (e) {
+        print('MapsService: Attempt $attempts failed: $e');
+        if (attempts >= maxRetries) break;
+        // Petit délai avant le prochain essai
+        await Future.delayed(Duration(milliseconds: 500 * attempts));
       }
-      if (!query.toLowerCase().contains('cameroun')) {
-        query += ', Cameroun';
-      }
-
-      final uri = Uri.parse('$_nominatimUrl/search').replace(
-        queryParameters: {
-          'q': query,
-          'format': 'json',
-          'limit': '1',
-          'countrycodes': 'cm',
-          'addressdetails': '1',
-          'accept-language': 'fr',
-        },
-      );
-
-      final response = await _client
-          .get(uri, headers: _headers)
-          .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode != 200) return null;
-
-      final List<dynamic> results = json.decode(response.body);
-      if (results.isEmpty) return null;
-
-      final loc = results.first as Map<String, dynamic>;
-      return {
-        'lat': double.parse(loc['lat'].toString()),
-        'lng': double.parse(loc['lon'].toString()),
-        'formatted_address': loc['display_name'] ?? destination,
-        'source': 'nominatim',
-      };
-    } catch (e) {
-      print('Erreur géocodage Nominatim: $e');
-      return null;
     }
+    return null;
   }
 
   // ─────────────────────────────────────────────
