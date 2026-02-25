@@ -87,9 +87,16 @@ class BleService {
   }
 
   /// Arrête la simulation ou le BLE.
+  /// Arrête la simulation ou le BLE et libère les ressources.
   void dispose() {
     isSimulating = false;
     _simulationTimer?.cancel();
+    
+    // Déconnexion propre du device.
+    _connectedDevice?.disconnect();
+    _connectedDevice = null;
+
+    // Fermeture du StreamController.
     _sensorDataController.close();
   }
   
@@ -163,9 +170,10 @@ class BleService {
       List<BluetoothService> services = await device.discoverServices();
       
       // 3. Recherche du SERVICE spécifique par UUID.
-      // On cherche notre service OPEN-EYES personnalisé.
+      print("🔍 Recherche du service: $SERVICE_UUID");
       BluetoothService? targetService;
       for (BluetoothService service in services) {
+        print("  - Service trouvé: ${service.uuid.toString()}");
         if (service.uuid.toString().toLowerCase() == SERVICE_UUID.toLowerCase()) {
           targetService = service;
           break;
@@ -177,6 +185,11 @@ class BleService {
         print("❌ ERREUR: Service UUID $SERVICE_UUID non trouvé sur l'ESP32.");
         print("Vérifiez que le firmware ESP32 utilise le même UUID.");
         return;
+      }
+
+      print("✅ Service cible trouvé. Liste des caractéristiques:");
+      for (var char in targetService.characteristics) {
+        print("  - Caractéristique: ${char.uuid.toString()} [notify: ${char.properties.notify}, read: ${char.properties.read}, write: ${char.properties.write}]");
       }
       
       // 4. Souscription aux 4 caractéristiques.
@@ -230,7 +243,10 @@ class BleService {
     
     // Écoute du flux de données (Notifications).
     // .onValueReceived est préférable pour les flux de données continus.
-    characteristic.onValueReceived.listen(callback);
+    characteristic.onValueReceived.listen((data) {
+      print("📥 DONNÉES REÇUES sur $uuid: ${data.length} bytes");
+      callback(data);
+    });
     print("📡 Écoute active sur la caractéristique $uuid");
   }
 
@@ -365,15 +381,4 @@ class BleService {
     _sensorDataController.add(data);
   }
 
-  /// Nettoyage des ressources lors de la fermeture du service.
-  void dispose() {
-    // Déconnexion propre du device.
-    _connectedDevice?.disconnect();
-    _connectedDevice = null;
-
-
-    
-    // Fermeture du StreamController.
-    _sensorDataController.close();
-  }
 }
