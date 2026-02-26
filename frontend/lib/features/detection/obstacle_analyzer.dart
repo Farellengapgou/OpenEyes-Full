@@ -20,46 +20,37 @@ class ObstacleAnalyzer {
   
   /// Seuil critique en mètres pour l'obstacle frontal.
   /// Si un objet est à moins de 1.0m, on déclenche l'arrêt.
-  static const double CRITICAL_DISTANCE_FRONT = 1.0; 
+  static const double CRITICAL_DISTANCE_FRONT = 0.4; 
 
   /// Méthode principale d'analyse.
   static Map<String, dynamic> analyze({
     required double front,
-    required double left,
-    required double right,
+    required double waterRaw,
     required bool waterDetected
   }) {
     
     // 1. VÉRIFICATION PRIORITAIRE : OBSTACLE FRONTAL
     if (front < CRITICAL_DISTANCE_FRONT) {
-      String advice = "Arrêtez-vous.";
-      
-      // Logique d'évitement
-      // On considère une voie "libre" si > 1.0m
-      bool leftFree = left > 1.0;
-      bool rightFree = right > 1.0;
-      
-      if (leftFree && rightFree) {
-        advice = "Obstacle devant. Contournez par la gauche ou la droite.";
-      } else if (leftFree) {
-        advice = "Obstacle devant. Contournez par la gauche.";
-      } else if (rightFree) {
-        advice = "Obstacle devant. Contournez par la droite.";
-      } else {
-        advice = "Zone bloquée. Reculez.";
-      }
-
       return {
         'status': SafetyStatus.stopObstacle,
-        'message': advice,
+        'message': "Obstacle devant. Arrêtez-vous.",
       };
     }
 
     // 2. VÉRIFICATION SECONDAIRE : EAU AU SOL
-    if (waterDetected) {
+    // - 0-1000: Négligeable.
+    // - 1000-3000: Caution.
+    // - > 3000: Critique (Arrêt).
+    
+    if (waterRaw > 3000) {
+      return {
+        'status': SafetyStatus.stopObstacle,
+        'message': "Niveau d'eau critique. Arrêtez-vous.",
+      };
+    } else if (waterRaw > 1000) {
       return {
         'status': SafetyStatus.cautionWater,
-        'message': "Attention, eau au sol. Reculez d'un pas.",
+        'message': "Attention, eau au sol considérable.",
       };
     }
 

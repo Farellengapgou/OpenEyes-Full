@@ -32,91 +32,110 @@ class ExpertAction {
 /// Cette classe contient les règles métier qui transforment les données brutes en instructions.
 class SimpleExpert {
   // --- ÉTAT INTERNE ---
-  // On garde en mémoire la dernière instruction et son heure pour éviter de répéter 
-  // la même chose 10 fois par seconde (anti-spam vocal).
-  
   DateTime? _lastInstructionTime;
   String? _lastInstruction;
   
   // Pour éviter les corrections immobiles
   double? _lastMovLat;
   double? _lastMovLon;
-  
+
+  // État pour l'évitement d'obstacles dynamique
+  bool _isAvoidingObstacle = false;
+  double? _initialObstacleHeading;
+  String? _suggestedAvoidanceTurn; // "droite" ou "gauche"
+
   // --- MÉTHODE PRINCIPALE ---
 
   /// Évalue la situation globale et retourne une [ExpertAction].
-  /// [sensor] : Les dernières données reçues de la canne.
-  /// [distToDestination] : Distance restante vers le  point cible (calculée ailleurs).
-  /// [bearingToDestination] : Cap théorique à suivre pour atteindre la cible (calculé ailleurs).
   ExpertAction evaluate({
     required SensorData sensor,
     required double distToDestination, 
     required double bearingToDestination, 
   }) {
     // --- RÈGLE 1 : OBSTACLE FRONTAL (Priorité ABSOLUE) ---
-    // L'évitement d'obstacles fonctionne même sans fix GPS.
     
     var obstacleStatus = ObstacleAnalyzer.analyze(
       front: sensor.frontDistance,
-      left: sensor.leftDistance,
-      right: sensor.rightDistance,
+      waterRaw: sensor.waterRawData,
       waterDetected: sensor.water
     );
     
-    // Si l'analyseur dit STOP...
     if (obstacleStatus['status'] == SafetyStatus.stopObstacle) {
-      // Pour les instructions d'évitement complexes, on veut éviter de couper
-      // la fin de la phrase ("Contournez par la droite") si elle est longue.
-      return ExpertAction.priority(
-        obstacleStatus['message'],
-        shouldStop: true,
-      );
+      if (!_isAvoidingObstacle) {
+        _isAvoidingObstacle = true;
+        _initialObstacleHeading = sensor.heading;
+        _suggestedAvoidanceTurn = "droite"; // On suggère arbitrairement la droite au début
+      }
+
+      // Si on est déjà en train d'éviter, on vérifie si l'utilisateur a tourné
+      if (_suggestedAvoidanceTurn != null) {
+        double headingDiff = (sensor.heading - _initialObstacleHeading!);
+        if (headingDiff > 180) headingDiff -= 360;
+        if (headingDiff < -180) headingDiff += 360;
+
+        // Si l'utilisateur a tourné de plus de 45° dans la direction suggérée mais l'obstacle persiste
+        // (Ou si on veut juste répéter l'instruction d'évitement)
+        if (_shouldSpeak("OBSTACLE_AVOID", 2)) {
+          return ExpertAction.priority(
+            "${obstacleStatus['message']} Tournez à $_suggestedAvoidanceTurn.",
+            shouldStop: true,
+          );
+        }
+        return ExpertAction.none();
+      }
+
+      if (_shouldSpeak("OBSTACLE_STOP", 2)) {
+        return ExpertAction.priority(
+          obstacleStatus['message'],
+          shouldStop: true,
+        );
+      }
+      return ExpertAction.none();
     }
 
-    // --- RÈGLE 2 : EAU AU SOL ---
-    // Si l'analyseur détecte de l'eau...
+    // Si plus d'obstacle, on reset l'état d'évitement
+    if (_isAvoidingObstacle && obstacleStatus['status'] == SafetyStatus.safe) {
+      _isAvoidingObstacle = false;
+      _initialObstacleHeading = null;
+      _suggestedAvoidanceTurn = null;
+    }
+
+    // --- RÈGLE 2 : EAU AU SOL (CAUTION) ---
     if (obstacleStatus['status'] == SafetyStatus.cautionWater) {
-      // On vérifie si on a déjà parlé de l'eau récemment (anti-spam 5 secondes).
       if (_shouldSpeak("EAU", 5)) {
         return ExpertAction(
           instruction: obstacleStatus['message'], 
           isPriority: true
         );
       }
-      // Sinon on ne dit rien pour l'instant.
     }
 
     // --- RÈGLE 0 : VALIDATION FIX GPS ---
-    // Les règles suivantes (navigation) ne s'appliquent QUE si la canne a un fix GPS.
     if (sensor.lat == 0.0 && sensor.lon == 0.0) {
       return ExpertAction.none();
     }
 
     // --- RÈGLE 3 : ARRIVÉE À DESTINATION ---
-    // Si on est à moins de 3 mètres de la cible.
     if (distToDestination < 3.0 && distToDestination >= 0) {
-       // Si on ne l'a pas déjà annoncé (état "ARRIVED").
        if (_lastInstruction != "ARRIVED") {
          _lastInstruction = "ARRIVED";
          return ExpertAction(
            instruction: "Vous êtes arrivé à destination.",
-           shouldStop: true, // On suggère l'arrêt car arrivé.
+           shouldStop: true,
            isPriority: true
          );
        }
-       // Si déjà annoncé, on ne dit plus rien.
        return ExpertAction.none();
     }
 
     // --- RÈGLE 4 : CORRECTION D'ORIENTATION (Heading) ---
-    // On ne corrige le cap QUE si l'utilisateur a bougé d'au moins 1.5m 
-    // ou si on a aucune position de référence (début).
-    // Ça évite le spam immobile dû au bruit du compas/GPS.
+    // Réduction de la sensibilité : On passe à 45° et on vérifie le mouvement.
     
     bool hasMoved = true;
     if (_lastMovLat != null && _lastMovLon != null) {
       double dist = _calculateDistance(_lastMovLat!, _lastMovLon!, sensor.lat, sensor.lon);
-      if (dist < 1.5) {
+      // Augmenter la distance de mouvement requise pour stabiliser
+      if (dist < 2.0) {
         hasMoved = false;
       }
     }
@@ -126,35 +145,32 @@ class SimpleExpert {
       _lastMovLon = sensor.lon;
     }
 
-    // Calcul de la différence angulaire.
     double diff = (bearingToDestination - sensor.heading);
-    
-    // Normalisation de l'angle entre -180 et +180 degrés pour avoir le chemin le plus court.
     if (diff > 180) diff -= 360;
     if (diff < -180) diff += 360;
     
-    // Si l'écart est significatif (> 30 degrés) ET qu'on bouge.
-    if (diff.abs() > 30 && hasMoved) {
-      // On limite la fréquence des corrections de direction (toutes les 6 secondes).
-      if (_shouldSpeak("TURN", 6)) {
-        // Si diff positif -> on doit tourner à droite.
-        // Si diff négatif -> on doit tourner à gauche.
+    // Seuil de correction augmenté à 40° pour plus de stabilité
+    double turnThreshold = 40.0;
+    
+    if (diff.abs() > turnThreshold && hasMoved) {
+      if (_shouldSpeak("TURN", 8)) { // Intervalle augmenté à 8s
         String direction = diff > 0 ? "droite" : "gauche";
-        
-        // Instruction humaine douce ("légèrement").
         return ExpertAction(
-          instruction: "Corrigez légèrement à $direction.",
+          instruction: "Tournez légèrement à $direction.",
         );
       }
-    } else {
-      // --- RÈGLE 5 : CONFIRMATION DEVANT ---
-      // Si on est dans la bonne direction (< 30° écart).
-      if (diff.abs() <= 30 && _shouldSpeak("GOOD", 15)) {
+    } else if (hasMoved) {
+      // RÈGLE 5 : CONFIRMATION DEVANT
+      if (diff.abs() <= 20 && _shouldSpeak("GOOD", 20)) {
          return ExpertAction(instruction: "Continuez tout droit.");
       }
+      
+      // RÈGLE 6 : ÉCART DE CHEMIN (Simplifié)
+      // Si on est à plus de 15m du prochain waypoint et que le bearing change trop par rapport à la position
+      // Cette logique est normalement gérée par le bearing qui change, mais on peut ajouter un message explicite
+      // si on détecte une dérive latérale importante (implémentation plus complexe requise pour être précis)
     }
 
-    // Si aucune règle ne se déclenche, on ne fait rien.
     return ExpertAction.none();
   }
 

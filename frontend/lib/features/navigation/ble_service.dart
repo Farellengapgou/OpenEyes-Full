@@ -49,6 +49,7 @@ class BleService {
   double _latestDistRight = 99.9;
   double _latestObstacleUp = 99.9;
   bool _latestWater = false;
+  double _latestWaterRawData = 0.0;
 
   /// Démarre une simulation logicielle de la canne (pour tests sans hardware).
   void startSimulation() {
@@ -244,7 +245,7 @@ class BleService {
     // Écoute du flux de données (Notifications).
     // .onValueReceived est préférable pour les flux de données continus.
     characteristic.onValueReceived.listen((data) {
-      print("📥 DONNÉES REÇUES sur $uuid: ${data.length} bytes");
+      // _printDebugInfo(uuid, data); // Trop bruyant
       callback(data);
     });
     print("📡 Écoute active sur la caractéristique $uuid");
@@ -252,18 +253,10 @@ class BleService {
 
   /// Helper pour logger proprement la réception de données.
   void _printDebugInfo(String sensorName, List<int> bytes) {
-    if (bytes.isEmpty) {
-      print("BLE [$sensorName] ℹ️ Paquet vide reçu (0 bytes)");
-      return;
-    }
-    
-    String hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
-    String decoded = "???";
-    try {
-      decoded = utf8.decode(bytes).trim();
-    } catch (_) {}
-
-    print("BLE [$sensorName] 📥 REÇU: $hex | TEXTE: '$decoded' (${bytes.length} bytes)");
+    // Désactivé pour réduire le bruit
+    /*
+    if (bytes.isEmpty) { ... }
+    */
   }
   
   /// Callback appelé quand des données GPS arrivent.
@@ -296,9 +289,12 @@ class BleService {
       
       Map<String, dynamic> json = jsonDecode(jsonString);
       
-      // Interprétation : si humidité > 30% (seuil arbitraire à ajuster), on considère qu'Il y a de l'eau
-      double level = (json['humidityLevel'] as num?)?.toDouble() ?? 0.0;
-      _latestWater = level > 30.0;
+      // Interprétation par rawData (0-4095)
+      _latestWaterRawData = (json['rawData'] as num?)?.toDouble() ?? 0.0;
+      
+      // Seuil de caution entre 1000 et 3000, critique au dessus
+      // La variable _latestWater pourra servir pour la caution, le système expert gérera le critique
+      _latestWater = _latestWaterRawData > 1000.0;
       
       _emitSensorData();
     } catch (e) {
@@ -306,9 +302,6 @@ class BleService {
     }
   }
   
-  /// Callback appelé quand des données d'obstacles arrivent.
-  /// Format ESP32 : {"upper": 120, "lower": 50, "servoAngle": 90}
-  /// Note: Les capteurs renvoient des cm. On convertit en mètres.
   /// Callback appelé quand des données d'obstacles arrivent.
   /// Format ESP32 : {"upper": 120, "lower": 50, "servoAngle": 90}
   /// Note: Les capteurs renvoient des cm. On convertit en mètres.
@@ -320,20 +313,12 @@ class BleService {
       
       Map<String, dynamic> json = jsonDecode(jsonString);
       
-      double lowerCm = (json['lower'] as num?)?.toDouble() ?? 9999.0;
+      // Upper est maintenant le capteur frontal principal
       double upperCm = (json['upper'] as num?)?.toDouble() ?? 9999.0;
-      double angle = (json['servoAngle'] as num?)?.toDouble() ?? 90.0;
+      double lowerCm = (json['lower'] as num?)?.toDouble() ?? 9999.0;
       
-      double distMeters = lowerCm / 100.0; // Conversion cm -> m
-      _latestObstacleUp = upperCm / 100.0;
-      
-      if (angle < 60) {
-        _latestDistLeft = distMeters;
-      } else if (angle > 120) {
-        _latestDistRight = distMeters;
-      } else {
-        _latestDistCenter = distMeters;
-      }
+      _latestDistCenter = upperCm / 100.0; // Conversion cm -> m
+      _latestObstacleUp = lowerCm / 100.0; // On stocke lower ailleurs si besoin, mais center est la priorité
       
       _emitSensorData();
     } catch (e) {
@@ -376,6 +361,7 @@ class BleService {
       rightDistance: _latestDistRight,
       obstacleUp: _latestObstacleUp,
       water: _latestWater,
+      waterRawData: _latestWaterRawData,
     );
     
     _sensorDataController.add(data);

@@ -24,6 +24,9 @@ class SensorData {
   /// Distance à l'obstacle en hauteur en mètres (ex: 1.6).
   final double obstacleUp;
 
+  /// Valeur brute du capteur d'eau (0-4095).
+  final double waterRawData;
+
   /// Indique si de l'eau a été détectée au sol (true = eau, false = sec).
   final bool water;
 
@@ -37,6 +40,7 @@ class SensorData {
     this.rightDistance = 99.9, // Par défaut infini
     required this.obstacleUp,
     required this.water,
+    this.waterRawData = 0.0,
   });
 
   /// Factory constructor pour créer une instance depuis un Map JSON.
@@ -52,12 +56,13 @@ class SensorData {
       
       obstacleUp: (json['obstacle_up'] as num?)?.toDouble() ?? 99.9,
       water: json['water'] as bool? ?? false,
+      waterRawData: (json['water_raw'] as num?)?.toDouble() ?? 0.0,
     );
   }
 
   /// Méthode utilitaire pour afficher les données de manière lisible dans les logs/console.
   @override
   String toString() {
-    return 'SensorData(L:$leftDistance C:$frontDistance R:$rightDistance, Up:$obstacleUp, Water:$water)';
+    return 'SensorData(L:$leftDistance C:$frontDistance R:$rightDistance, Up:$obstacleUp, WaterRaw:$waterRawData)';
   }
 }

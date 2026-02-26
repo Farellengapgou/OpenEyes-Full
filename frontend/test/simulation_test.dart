@@ -13,11 +13,12 @@ void main() {
     test('Scenario 1: Obstacle Frontal -> Advice to Avoid (Even with GPS 0,0)', () {
       final sensor = SensorData(
         lat: 0.0, lon: 0.0, heading: 0,
-        frontDistance: 0.5, 
+        frontDistance: 0.3, 
         leftDistance: 2.0,  
         rightDistance: 0.5,
         obstacleUp: 2.0,
-        water: false
+        water: false,
+        waterRawData: 0.0,
       );
 
       final action = expert.evaluate(
@@ -28,7 +29,8 @@ void main() {
 
       print("Scenario 1 Output: ${action.instruction}");
       expect(action.shouldStop, true);
-      expect(action.instruction, contains("Contournez par la gauche"));
+      expect(action.instruction, contains("Obstacle devant"));
+      expect(action.instruction, contains("Tournez à droite"));
     });
     
     test('Scenario 2: GPS is 0,0 -> Navigation instructions are ignored', () {
@@ -36,7 +38,8 @@ void main() {
         lat: 0.0, lon: 0.0, heading: 45, // Cap faussé
         frontDistance: 2.0,
         obstacleUp: 2.0,
-        water: false
+        water: false,
+        waterRawData: 0.0,
       );
 
       final action = expert.evaluate(
@@ -54,7 +57,8 @@ void main() {
         heading: 300, // 60 degs off
         frontDistance: 2.0,
         obstacleUp: 2.0,
-        water: false
+        water: false,
+        waterRawData: 0.0,
       );
 
       final action = expert.evaluate(
@@ -70,19 +74,19 @@ void main() {
     test('Scenario 4: Stationary Filtering -> No repeated instructions', () {
       // 1er appel : Correction
       expert.evaluate(
-        sensor: SensorData(lat: 4.0, lon: 9.0, heading: 340, frontDistance: 2.0, obstacleUp: 2.0, water: false),
+        sensor: SensorData(lat: 4.0, lon: 9.0, heading: 320, frontDistance: 2.0, obstacleUp: 2.0, water: false, waterRawData: 0.0),
         distToDestination: 50.0,
         bearingToDestination: 0.0,
       );
 
       // 2ème appel : Toujours au même endroit, le heading a empiré mais on n'a pas bougé
       final action = expert.evaluate(
-        sensor: SensorData(lat: 4.0, lon: 9.0, heading: 320, frontDistance: 2.0, obstacleUp: 2.0, water: false),
+        sensor: SensorData(lat: 4.0, lon: 9.0, heading: 310, frontDistance: 2.0, obstacleUp: 2.0, water: false, waterRawData: 0.0),
         distToDestination: 50.0,
         bearingToDestination: 0.0,
       );
 
-      expect(action.instruction, isEmpty, reason: "Pas d'instruction si on n'a pas bougé de 1.5m");
+      expect(action.instruction, isEmpty, reason: "Pas d'instruction si on n'a pas bougé de 2.0m");
     });
 
     test('Scenario 5: Arrival', () {
@@ -90,7 +94,8 @@ void main() {
         lat: 4.0, lon: 9.0, heading: 0,
         frontDistance: 2.0,
         obstacleUp: 2.0,
-        water: false
+        water: false,
+        waterRawData: 0.0,
       );
 
       final action = expert.evaluate(

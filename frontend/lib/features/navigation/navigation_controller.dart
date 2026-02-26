@@ -24,6 +24,9 @@ class NavigationController {
   StreamSubscription? _gpsSubscription;
   Timer? _watchdog;
 
+  // Position locale pour le fallback
+  Position? _lastPhonePosition;
+
   // Stream pour mettre à jour l'UI
   final StreamController<String> _instructionController =
       StreamController<String>.broadcast();
@@ -56,11 +59,26 @@ class NavigationController {
     await _audioGuidance.speak(
         "Calcul de l'itinéraire vers $destinationText.");
 
+    // Démarrer l'écoute GPS du téléphone dès le début (utile pour le fallback même si la canne est là)
+    _gpsSubscription?.cancel();
+    _gpsSubscription = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 2, 
+      ),
+    ).listen((Position position) {
+      _lastPhonePosition = position;
+      if (isNavigating && !_bleService.isConnected) {
+        _processPhonePosition(position);
+      }
+    });
+
     try {
       // 1. Position actuelle
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.best,
       );
+      _lastPhonePosition = position;
 
       // 2. Géocodage + Routing (Nominatim + OSRM) – directs depuis Flutter
       final route = await _mapsService.getRouteFromText(
@@ -142,34 +160,34 @@ class NavigationController {
         if (!dataReceived) {
           dataReceived = true;
           _watchdog?.cancel();
-          print("📡 Première donnée canne reçue. Watchdog annulé.");
         }
-        _processSensorData(sensorData);
+
+        // --- FALLBACK GPS : Si la canne n'a pas de fix (0,0), on utilise le téléphone ---
+        if (sensorData.lat == 0.0 && sensorData.lon == 0.0 && _lastPhonePosition != null) {
+           final mergedData = SensorData(
+             lat: _lastPhonePosition!.latitude,
+             lon: _lastPhonePosition!.longitude,
+             heading: sensorData.heading, // On garde le heading de la canne (IMU)
+             frontDistance: sensorData.frontDistance,
+             leftDistance: sensorData.leftDistance,
+             rightDistance: sensorData.rightDistance,
+             obstacleUp: sensorData.obstacleUp,
+             water: sensorData.water,
+             waterRawData: sensorData.waterRawData,
+           );
+           _processSensorData(mergedData);
+        } else {
+          _processSensorData(sensorData);
+        }
       });
     } else {
-      _startGpsFallback();
+      await _audioGuidance.speak("Navigation par GPS téléphone uniquement.");
     }
-  }
-
-  /// Active le flux GPS du téléphone en cas d'absence de canne.
-  Future<void> _startGpsFallback() async {
-    await _audioGuidance.speak("Navigation par GPS téléphone uniquement.");
-    
-    _gpsSubscription?.cancel();
-    _gpsSubscription = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 2, 
-      ),
-    ).listen((Position position) {
-      if (!isNavigating) return;
-      _processPhonePosition(position);
-    });
   }
 
   /// Traite la position du téléphone (fallback sans canne).
   void _processPhonePosition(Position pos) {
-    // Créer un SensorData minimaliste (juste GPS + Heading)
+    // Créer un SensorData minimaliste (juste GPS + Heading téléphone)
     final data = SensorData(
       lat: pos.latitude,
       lon: pos.longitude,
@@ -179,6 +197,7 @@ class NavigationController {
       rightDistance: 99.9,
       obstacleUp: 99.9,
       water: false,
+      waterRawData: 0.0,
     );
     _processSensorData(data);
   }

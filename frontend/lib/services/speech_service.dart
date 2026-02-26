@@ -24,7 +24,7 @@ class SpeechService {
 
   /// Écoute principale – minimum 6 secondes garanties
   Future<String?> listen({
-    Duration listenDuration = const Duration(seconds: 6),
+    Duration listenDuration = const Duration(seconds: 10),
     String localeId = 'fr_FR',
   }) async {
     if (!_isInitialized) {
@@ -60,16 +60,9 @@ class SpeechService {
       if (status == 'done' || status == 'notListening') {
         if (!hasStartedListening || listeningStart == null) return;
 
-        final elapsed =
-            DateTime.now().difference(listeningStart!).inSeconds;
-
-        // 🔒 GARANTIR AU MOINS 6 SECONDES D'ÉCOUTE
-        if (elapsed < 6) {
-          print("STT: Stop ignoré (écoute trop courte)");
-          return;
-        }
-
-        HapticFeedback.lightImpact();
+        // On vibre deux fois à la fin pour bien marquer
+        HapticFeedback.mediumImpact();
+        Future.delayed(const Duration(milliseconds: 200), () => HapticFeedback.lightImpact());
 
         if (!completer.isCompleted) {
           completer.complete(
@@ -82,7 +75,7 @@ class SpeechService {
     try {
       await _speech.listen(
         localeId: localeId,
-        listenFor: const Duration(seconds: 20),
+        listenFor: const Duration(seconds: 25),
         pauseFor: const Duration(seconds: 8),
         partialResults: true,
         listenOptions: stt.SpeechListenOptions(
@@ -116,7 +109,7 @@ class SpeechService {
   /// Confirmation Oui / Non
   Future<ConfirmationResult> listenConfirmation() async {
     final text = await listen(
-      listenDuration: const Duration(seconds: 6),
+      listenDuration: const Duration(seconds: 25),
     );
 
     if (text == null || text.isEmpty) {

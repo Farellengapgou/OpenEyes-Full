@@ -147,17 +147,29 @@ class _NavigationScreenState extends State<NavigationScreen> {
   Future<void> _startVoiceNavigation() async {
     try {
       await _speak(
-        'Dites votre destination apres le bip',
+        'Dites votre destination apres la vibration',
         postDelay: const Duration(milliseconds: 300),
       );
 
-      final rawText = await _speechService.listen(
-        listenDuration: const Duration(seconds: 6),
-        localeId: 'fr_FR',
-      );
+      String? rawText;
+      int retryCount = 0;
+      
+      while (retryCount < 3) {
+        rawText = await _speechService.listen(
+          listenDuration: const Duration(seconds: 10),
+          localeId: 'fr_FR',
+        );
+
+        if (rawText != null && rawText.isNotEmpty) break;
+        
+        retryCount++;
+        if (retryCount < 3) {
+          await _speak('Je n\'ai rien entendu. Dites votre destination après la vibration.');
+        }
+      }
 
       if (rawText == null || rawText.isEmpty) {
-        await _speak('Je n\'ai rien entendu. Réessayez.');
+        await _speak('Désolé, je ne vous entends pas bien. Abandon de la recherche.');
         return;
       }
 
