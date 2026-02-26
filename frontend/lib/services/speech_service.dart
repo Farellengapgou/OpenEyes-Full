@@ -1,28 +1,30 @@
 import 'dart:async';
+import 'package:flutter/services.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 /// Service de reconnaissance vocale locale.
-/// Utilise le moteur STT natif du téléphone (iOS: Siri offline, Android: Google STT).
-/// Remplace entièrement le backend Whisper Python.
+/// STT natif Android / iOS
 class SpeechService {
   final stt.SpeechToText _speech = stt.SpeechToText();
   bool _isInitialized = false;
-  String _lastRecognized = ""; // Stocke les résultats partiels
 
-  /// Initialise le moteur STT. À appeler une seule fois au démarrage.
+  String _lastRecognized = "";
+
+  /// Initialisation (à appeler au démarrage)
   Future<bool> initialize() async {
     if (_isInitialized) return true;
+
     _isInitialized = await _speech.initialize(
-      onError: (error) => print('STT Error: ${error.errorMsg}'),
-      onStatus: (status) => print('STT Status: $status'),
       debugLogging: false,
+      onError: (e) => print("STT Error: ${e.errorMsg}"),
+      onStatus: (s) => print("STT Status: $s"),
     );
     return _isInitialized;
   }
 
-  /// Lance une écoute et retourne le texte transcrit.
+  /// Écoute principale – minimum 6 secondes garanties
   Future<String?> listen({
-    Duration listenDuration = const Duration(seconds: 10),
+    Duration listenDuration = const Duration(seconds: 6),
     String localeId = 'fr_FR',
   }) async {
     if (!_isInitialized) {
@@ -30,110 +32,120 @@ class SpeechService {
       if (!ok) return null;
     }
 
-    // 1ère tentative
-    print("STT: Attempt 1...");
-    String? result = await _listenInternal(listenDuration, localeId);
-    
-    // Si échec (null ou vide), on retente une fois après une pause plus longue
-    if (result == null || result.trim().isEmpty) {
-      print("STT: First attempt failed, retrying in 1200ms...");
-      await Future.delayed(const Duration(milliseconds: 1200));
-      result = await _listenInternal(listenDuration, localeId);
-    }
-
-    return (result != null && result.trim().isNotEmpty) ? result.trim() : null;
+    return _listenInternal(listenDuration, localeId);
   }
 
-  /// Logique d'écoute protégée contre les arrêts prématurés et conflits client
   Future<String?> _listenInternal(Duration listenDuration, String localeId) async {
-    // SECURITE : On arrête tout avant de commencer pour éviter "error_client"
-    try {
-      await _speech.stop();
-      await _speech.cancel();
-      await Future.delayed(const Duration(milliseconds: 400));
-    } catch (e) {
-      print("STT Cleanup error (ignored): $e");
-    }
-
     final completer = Completer<String?>();
     _lastRecognized = "";
-    final start = DateTime.now();
 
-    print("STT: _listenInternal start...");
+    bool hasStartedListening = false;
+    DateTime? listeningStart;
+
+    // ⚠️ Stop UNIQUEMENT si déjà en écoute (PAS de cancel)
+    if (_speech.isListening) {
+      await _speech.stop();
+    }
 
     _speech.statusListener = (status) {
-      final elapsed = DateTime.now().difference(start).inMilliseconds;
-      print("STT Status ($elapsed ms): $status");
+      print("STT Status: $status");
+
+      // ✅ VIBRATION AU MOMENT EXACT OÙ LE MICRO S’OUVRE
+      if (status == 'listening' && !hasStartedListening) {
+        hasStartedListening = true;
+        listeningStart = DateTime.now();
+        HapticFeedback.heavyImpact();
+      }
 
       if (status == 'done' || status == 'notListening') {
-        if (elapsed < 700 && _lastRecognized.isEmpty) {
-          print("STT: Ignoring lightning stop.");
+        if (!hasStartedListening || listeningStart == null) return;
+
+        final elapsed =
+            DateTime.now().difference(listeningStart!).inSeconds;
+
+        // 🔒 GARANTIR AU MOINS 6 SECONDES D'ÉCOUTE
+        if (elapsed < 6) {
+          print("STT: Stop ignoré (écoute trop courte)");
           return;
         }
 
+        HapticFeedback.lightImpact();
+
         if (!completer.isCompleted) {
-          Future.delayed(const Duration(milliseconds: 400), () {
-            if (!completer.isCompleted) {
-              completer.complete(_lastRecognized.isNotEmpty ? _lastRecognized : null);
-            }
-          });
+          completer.complete(
+            _lastRecognized.isNotEmpty ? _lastRecognized : null,
+          );
         }
       }
     };
 
     try {
       await _speech.listen(
-        onResult: (val) {
-          _lastRecognized = val.recognizedWords;
-          if (val.finalResult && !completer.isCompleted) {
-            completer.complete(_lastRecognized);
-          }
-        },
-        listenFor: listenDuration,
-        pauseFor: const Duration(seconds: 4),
         localeId: localeId,
+        listenFor: const Duration(seconds: 20),
+        pauseFor: const Duration(seconds: 8),
+        partialResults: true,
         listenOptions: stt.SpeechListenOptions(
           cancelOnError: false,
           partialResults: true,
-          onDevice: true,
+          onDevice: true, // 🔥 réduit fortement la latence si supporté
         ),
+        onResult: (result) {
+          _lastRecognized = result.recognizedWords;
+
+          if (result.finalResult && !completer.isCompleted) {
+            completer.complete(_lastRecognized);
+          }
+        },
       );
     } catch (e) {
-      print("STT: Error in internal listen: $e");
+      print("STT listen error: $e");
       if (!completer.isCompleted) completer.complete(null);
     }
 
-    return await completer.future.timeout(
-      listenDuration + const Duration(seconds: 3),
+    return completer.future.timeout(
+      listenDuration + const Duration(seconds: 4),
       onTimeout: () {
+        print("STT Timeout");
         _speech.stop();
         return _lastRecognized.isNotEmpty ? _lastRecognized : null;
       },
-    ).catchError((e) {
-      print("STT Timeout/Error catch: $e");
-      return _lastRecognized.isNotEmpty ? _lastRecognized : null;
-    });
+    );
   }
 
-  /// Écoute une confirmation Oui/Non.
-  /// Retourne [ConfirmationResult.yes], [ConfirmationResult.no] ou [ConfirmationResult.unclear].
+  /// Confirmation Oui / Non
   Future<ConfirmationResult> listenConfirmation() async {
-    final text = await listen(listenDuration: const Duration(seconds: 5));
-    if (text == null || text.trim().isEmpty) return ConfirmationResult.unclear;
+    final text = await listen(
+      listenDuration: const Duration(seconds: 6),
+    );
 
-    final lower = text.toLowerCase().trim();
+    if (text == null || text.isEmpty) {
+      return ConfirmationResult.unclear;
+    }
 
-    const yesKeywords = [
-      'oui', 'yes', 'ok', "d'accord", 'daccord', 'exactement',
-      'correct', 'parfait', 'vas-y', 'vas y', 'allons-y', 'allons y', 'go',
+    final lower = text.toLowerCase();
+
+    const yes = [
+      'oui',
+      'yes',
+      'ok',
+      "d'accord",
+      'vas-y',
+      'go',
+      'parfait',
     ];
-    const noKeywords = [
-      'non', 'no', 'pas ça', 'pas ca', 'pas correct', 'mauvais',
-      'annuler', 'stop', 'arrête', 'arreter',
+
+    const no = [
+      'non',
+      'no',
+      'annuler',
+      'stop',
+      'pas',
     ];
 
-    if (yesKeywords.any((k) => lower.contains(k))) return ConfirmationResult.yes;
-    if (noKeywords.any((k) => lower.contains(k))) return ConfirmationResult.no;
+    if (yes.any(lower.contains)) return ConfirmationResult.yes;
+    if (no.any(lower.contains)) return ConfirmationResult.no;
+
     return ConfirmationResult.unclear;
   }
 
