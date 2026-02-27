@@ -197,12 +197,13 @@ class MapsService {
         }
 
         final dist = (step['distance'] as num).toDouble();
-        final dur = (step['duration'] as num).toDouble();
+        // OSRM foot duration is often too fast or inaccurate. Estimate 1.4 m/s (5 km/h) walking speed.
+        final durSeconds = dist / 1.4;
 
         steps.add(RouteStep(
           instruction: instruction,
           distance: '${dist.toStringAsFixed(0)} m',
-          duration: '${(dur / 60).toStringAsFixed(1)} min',
+          duration: '${(durSeconds / 60).toStringAsFixed(1)} min',
           startLocation: Location(
             lat: (startCoords[1] as num).toDouble(),
             lng: (startCoords[0] as num).toDouble(),
@@ -215,14 +216,14 @@ class MapsService {
       }
 
       final totalDist = (route['distance'] as num).toDouble();
-      final totalDur = (route['duration'] as num).toDouble();
+      final totalDurSeconds = totalDist / 1.4; // Calcul fiable de durée piéton
 
       return NavigationRoute(
         summary: (leg['summary'] as String?) ?? 'Itinéraire piéton',
         totalDistance: totalDist > 1000
             ? '${(totalDist / 1000).toStringAsFixed(2)} km'
             : '${totalDist.toStringAsFixed(0)} m',
-        totalDuration: '${(totalDur / 60).toStringAsFixed(0)} min',
+        totalDuration: '${(totalDurSeconds / 60).toStringAsFixed(0)} min',
         steps: steps,
         destinationCoords: Location(lat: destLat, lng: destLng),
         formattedAddress: formattedAddress,

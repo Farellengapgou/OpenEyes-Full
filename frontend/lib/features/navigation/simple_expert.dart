@@ -49,6 +49,9 @@ class SimpleExpert {
   double _peakWaterLevel = 0.0;
   DateTime _waterCooldownUntil = DateTime(2000);
 
+  // État Client-side Yaw Fallback
+  double _lastKnownGoodHeading = 0.0;
+
   // --- MÉTHODE PRINCIPALE ---
 
   /// Évalue la situation globale et retourne une [ExpertAction].
@@ -57,6 +60,18 @@ class SimpleExpert {
     required double distToDestination, 
     required double bearingToDestination, 
   }) {
+    // --- FALLBACK YAW (Si le heading de la canne est nul ou bloqué) ---
+    // Note: this is a rudimentary fallback assuming the phone/app keeps track of last good heading
+    // To truly use pitch/roll to get yaw without a magnetometer is mathematically impossible (pitch/roll are relative to gravity, yaw is relative to magnetic north), 
+    // but we can freeze the last good heading so the app doesn't spin wildly.
+    double currentHeading = sensor.heading;
+    if (currentHeading == 0.0 || currentHeading.isNaN) {
+       currentHeading = _lastKnownGoodHeading;
+    } else {
+       _lastKnownGoodHeading = currentHeading;
+    }
+
+
     // --- EVALUATION CAPTEURS ---
     var obstacleStatus = ObstacleAnalyzer.analyze(
       front: sensor.frontDistance,
@@ -111,12 +126,12 @@ class SimpleExpert {
       // Cas d'un obstacle physique (pas l'eau)
       if (!_isAvoidingObstacle) {
         _isAvoidingObstacle = true;
-        _initialObstacleHeading = sensor.heading;
+        _initialObstacleHeading = currentHeading;
         _suggestedAvoidanceTurn = "droite"; 
       }
 
       if (_suggestedAvoidanceTurn != null) {
-        double headingDiff = (sensor.heading - _initialObstacleHeading!);
+        double headingDiff = (currentHeading - _initialObstacleHeading!);
         if (headingDiff > 180) headingDiff -= 360;
         if (headingDiff < -180) headingDiff += 360;
 
@@ -194,7 +209,7 @@ class SimpleExpert {
       _lastMovLon = sensor.lon;
     }
 
-    double diff = (bearingToDestination - sensor.heading);
+    double diff = (bearingToDestination - currentHeading);
     if (diff > 180) diff -= 360;
     if (diff < -180) diff += 360;
     
@@ -210,9 +225,9 @@ class SimpleExpert {
         );
       }
     } else if (hasMoved && !_isAvoidingObstacle) {
-      // RÈGLE 5 : CONFIRMATION DEVANT
-      if (diff.abs() <= 20 && _shouldSpeak("GOOD", 20)) {
-         return ExpertAction(instruction: "Continuez tout droit.");
+      // RÈGLE 5 : CONFIRMATION DEVANT (Intervalle allongé à 60s pour la continuité)
+      if (diff.abs() <= 20 && _shouldSpeak("GOOD", 60)) {
+         return ExpertAction(instruction: "Parfait, continuez tout droit.");
       }
     }
 

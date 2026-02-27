@@ -105,13 +105,15 @@ class _NavigationScreenState extends State<NavigationScreen> {
     _volumeClickCount++;
     _clickTimer?.cancel();
 
-    _clickTimer = Timer(const Duration(milliseconds: 800), () async {
-      if (_volumeClickCount == 3 && !_isNavigating) {
+    _clickTimer = Timer(const Duration(milliseconds: 1500), () async {
+      int finalCount = _volumeClickCount;
+      _volumeClickCount = 0; // reset immédiatement
+
+      if (finalCount == 3 && !_isNavigating) {
         await _startVoiceNavigation();
-      } else if (_volumeClickCount >= 4 && _isNavigating) {
+      } else if (finalCount >= 4 && _isNavigating) {
         _stopNavigation();
       }
-      _volumeClickCount = 0;
     });
   }
 
