@@ -30,10 +30,18 @@ class ObstacleAnalyzer {
   }) {
     
     // 1. VÉRIFICATION PRIORITAIRE : OBSTACLE FRONTAL
-    if (front < CRITICAL_DISTANCE_FRONT) {
+    if (front < CRITICAL_DISTANCE_FRONT && front > 0.0) {
+      int distCm = (front * 100).toInt();
       return {
         'status': SafetyStatus.stopObstacle,
-        'message': "Obstacle devant. Arrêtez-vous.",
+        'message': "Obstacle à environ $distCm centimètres.",
+        'isWater': false,
+      };
+    } else if (front < CRITICAL_DISTANCE_FRONT) {
+      return {
+        'status': SafetyStatus.stopObstacle,
+        'message': "Obstacle détecté.",
+        'isWater': false,
       };
     }
 
@@ -45,18 +53,21 @@ class ObstacleAnalyzer {
     if (waterRaw > 3000) {
       return {
         'status': SafetyStatus.stopObstacle,
-        'message': "Niveau d'eau critique. Arrêtez-vous.",
+        'message': "Niveau d'eau critique.",
+        'isWater': true,
       };
     } else if (waterRaw > 1000) {
       return {
         'status': SafetyStatus.cautionWater,
-        'message': "Attention, eau au sol considérable.",
+        'message': "Attention, eau au sol.",
+        'isWater': true,
       };
     }
 
     return {
       'status': SafetyStatus.safe,
       'message': null,
+      'isWater': false,
     };
   }
 }

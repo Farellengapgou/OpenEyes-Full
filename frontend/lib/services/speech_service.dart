@@ -24,7 +24,7 @@ class SpeechService {
 
   /// Écoute principale – minimum 6 secondes garanties
   Future<String?> listen({
-    Duration listenDuration = const Duration(seconds: 10),
+    Duration listenDuration = const Duration(seconds: 20),
     String localeId = 'fr_FR',
   }) async {
     if (!_isInitialized) {
@@ -75,8 +75,8 @@ class SpeechService {
     try {
       await _speech.listen(
         localeId: localeId,
-        listenFor: const Duration(seconds: 25),
-        pauseFor: const Duration(seconds: 8),
+        listenFor: const Duration(seconds: 40),
+        pauseFor: const Duration(seconds: 15),
         partialResults: true,
         listenOptions: stt.SpeechListenOptions(
           cancelOnError: false,
@@ -109,7 +109,7 @@ class SpeechService {
   /// Confirmation Oui / Non
   Future<ConfirmationResult> listenConfirmation() async {
     final text = await listen(
-      listenDuration: const Duration(seconds: 25),
+      listenDuration: const Duration(seconds: 15),
     );
 
     if (text == null || text.isEmpty) {

@@ -1,66 +1,61 @@
-import 'package:flutter_tts/flutter_tts.dart'; // Le moteur de synthèse vocale
+import 'dart:collection';
+import 'package:flutter_tts/flutter_tts.dart';
 
 /// Service responsable de la sortie audio (Text-to-Speech).
 /// Il permet à l'application de "parler" à l'utilisateur aveugle.
 class AudioGuidance {
-  /// Instance du moteur TTS (Text-to-Speech).
   final FlutterTts flutterTts = FlutterTts();
-  
-  /// État interne pour savoir si le moteur est en train de parler.
   bool _isSpeaking = false;
+  final Queue<String> _queue = Queue<String>();
 
-  /// Constructeur : initialise la configuration TTS.
   AudioGuidance() {
     _initTts();
   }
 
-  /// Configuration initiale du moteur vocal.
   Future<void> _initTts() async {
-    // Définit la langue en Français.
     await flutterTts.setLanguage("fr-FR");
     await flutterTts.awaitSpeakCompletion(true);
-    
-    // Définit la vitesse de parole (0.5 est une vitesse moyenne, claire et compréhensible).
     await flutterTts.setSpeechRate(0.5); 
-    
-    // Volume maximal (1.0).
     await flutterTts.setVolume(1.0);
     
-    // Callback appelé quand une phrase est terminée.
     flutterTts.setCompletionHandler(() {
       _isSpeaking = false;
+      _processQueue();
     });
   }
 
-  /// Méthode principale pour faire parler l'application.
-  /// [text] : Le texte à prononcer.
-  /// [force] : Si true, interrompt la phrase en cours (ex: pour un STOP urgent).
   Future<void> speak(String text, {bool force = false}) async {
-    // Protection : on ne parle pas pour rien dire.
     if (text.isEmpty) return;
 
-    // Si le moteur parle déjà...
-    if (_isSpeaking && !force) {
-      // ... et que ce n'est pas une urgence (force=false), 
-      // on ignore cette nouvelle phrase pour ne pas saturer l'utilisateur.
+    if (force) {
+      _queue.clear();
+      await flutterTts.stop();
+      _isSpeaking = false;
+      
+      _isSpeaking = true;
+      await flutterTts.speak(text);
       return;
     }
 
-    // Si c'est urgent (force=true), on coupe la parole actuelle immédiatement.
-    if (force) {
-      await flutterTts.stop();
+    if (_queue.isEmpty || _queue.last != text) {
+      _queue.add(text);
     }
-
-    // On marque l'état comme "en train de parler".
-    _isSpeaking = true;
     
-    // On envoie le texte au moteur.
-    await flutterTts.speak(text);
+    _processQueue();
   }
 
-  /// Arrête immédiatement toute vocalisation en cours.
+  Future<void> _processQueue() async {
+    if (_isSpeaking || _queue.isEmpty) return;
+
+    _isSpeaking = true;
+    String nextText = _queue.removeFirst();
+    await flutterTts.speak(nextText);
+  }
+
   Future<void> stop() async {
+    _queue.clear();
     await flutterTts.stop();
     _isSpeaking = false;
   }
 }
+

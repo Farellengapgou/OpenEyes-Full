@@ -44,6 +44,11 @@ class SimpleExpert {
   double? _initialObstacleHeading;
   String? _suggestedAvoidanceTurn; // "droite" ou "gauche"
 
+  // État pour l'eau (cooldown)
+  int _waterWarningCount = 0;
+  double _peakWaterLevel = 0.0;
+  DateTime _waterCooldownUntil = DateTime(2000);
+
   // --- MÉTHODE PRINCIPALE ---
 
   /// Évalue la situation globale et retourne une [ExpertAction].
@@ -52,57 +57,104 @@ class SimpleExpert {
     required double distToDestination, 
     required double bearingToDestination, 
   }) {
-    // --- RÈGLE 1 : OBSTACLE FRONTAL (Priorité ABSOLUE) ---
-    
+    // --- EVALUATION CAPTEURS ---
     var obstacleStatus = ObstacleAnalyzer.analyze(
       front: sensor.frontDistance,
       waterRaw: sensor.waterRawData,
       waterDetected: sensor.water
     );
-    
-    if (obstacleStatus['status'] == SafetyStatus.stopObstacle) {
-      if (!_isAvoidingObstacle) {
-        _isAvoidingObstacle = true;
-        _initialObstacleHeading = sensor.heading;
-        _suggestedAvoidanceTurn = "droite"; // On suggère arbitrairement la droite au début
+
+    bool isWater = obstacleStatus['isWater'] == true;
+
+    // --- COOLDOWN EAU ---
+    if (DateTime.now().isBefore(_waterCooldownUntil)) {
+      if (isWater) { // On ignore l'eau pendant le cooldown
+        obstacleStatus = {
+          'status': SafetyStatus.safe,
+          'message': null,
+          'isWater': false,
+        };
       }
+    } else {
+      if (isWater) {
+        if (sensor.waterRawData > _peakWaterLevel) {
+          _peakWaterLevel = sensor.waterRawData;
+        } else if (_peakWaterLevel > 2000 && sensor.waterRawData < 1500 && _waterWarningCount >= 1) {
+          // S'il y a eu une grosse chute d'eau détectée après un pic = cooldown
+          _waterCooldownUntil = DateTime.now().add(const Duration(seconds: 15));
+          _waterWarningCount = 0;
+          _peakWaterLevel = 0;
+          obstacleStatus = {
+            'status': SafetyStatus.safe,
+            'message': null,
+            'isWater': false,
+          };
+        }
+      } else {
+        _peakWaterLevel = 0;
+      }
+    }
 
-      // Si on est déjà en train d'éviter, on vérifie si l'utilisateur a tourné
-      if (_suggestedAvoidanceTurn != null) {
-        double headingDiff = (sensor.heading - _initialObstacleHeading!);
-        if (headingDiff > 180) headingDiff -= 360;
-        if (headingDiff < -180) headingDiff += 360;
-
-        // Si l'utilisateur a tourné de plus de 45° dans la direction suggérée mais l'obstacle persiste
-        // (Ou si on veut juste répéter l'instruction d'évitement)
-        if (_shouldSpeak("OBSTACLE_AVOID", 2)) {
+    // --- RÈGLE 1 : OBSTACLE FRONTAL (Priorité ABSOLUE) ---
+    if (obstacleStatus['status'] == SafetyStatus.stopObstacle) {
+      if (isWater) {
+        if (_shouldSpeak("EAU_CRITIQUE", 5)) {
+          _waterWarningCount++;
           return ExpertAction.priority(
-            "${obstacleStatus['message']} Tournez à $_suggestedAvoidanceTurn.",
+            obstacleStatus['message'],
             shouldStop: true,
           );
         }
         return ExpertAction.none();
       }
 
-      if (_shouldSpeak("OBSTACLE_STOP", 2)) {
-        return ExpertAction.priority(
-          obstacleStatus['message'],
-          shouldStop: true,
-        );
+      // Cas d'un obstacle physique (pas l'eau)
+      if (!_isAvoidingObstacle) {
+        _isAvoidingObstacle = true;
+        _initialObstacleHeading = sensor.heading;
+        _suggestedAvoidanceTurn = "droite"; 
       }
-      return ExpertAction.none();
+
+      if (_suggestedAvoidanceTurn != null) {
+        double headingDiff = (sensor.heading - _initialObstacleHeading!);
+        if (headingDiff > 180) headingDiff -= 360;
+        if (headingDiff < -180) headingDiff += 360;
+
+        if (headingDiff.abs() > 40) {
+          // Il a tourné, mais l'obstacle est TOUJOURS LÀ.
+          if (_shouldSpeak("OBSTACLE_AVOID", 4)) {
+            _suggestedAvoidanceTurn = _suggestedAvoidanceTurn == "droite" ? "gauche" : "droite";
+            return ExpertAction.priority(
+              "Pas libre, essayez de prendre à $_suggestedAvoidanceTurn.",
+              shouldStop: true,
+            );
+          }
+        } else {
+          // Il n'a pas encore (suffisamment) tourné
+          if (_shouldSpeak("OBSTACLE_AVOID_INIT", 4)) {
+            return ExpertAction.priority(
+              "${obstacleStatus['message']} Essayez de prendre à $_suggestedAvoidanceTurn.",
+              shouldStop: true,
+            );
+          }
+        }
+        return ExpertAction.none();
+      }
     }
 
-    // Si plus d'obstacle, on reset l'état d'évitement
-    if (_isAvoidingObstacle && obstacleStatus['status'] == SafetyStatus.safe) {
+    // Si plus d'obstacle physique, on reset l'état d'évitement
+    if (_isAvoidingObstacle && !isWater && obstacleStatus['status'] == SafetyStatus.safe) {
       _isAvoidingObstacle = false;
+      String dir = _suggestedAvoidanceTurn ?? "droite";
       _initialObstacleHeading = null;
       _suggestedAvoidanceTurn = null;
+      return ExpertAction.priority("$dir libre, c'est okay. On continue.");
     }
 
     // --- RÈGLE 2 : EAU AU SOL (CAUTION) ---
     if (obstacleStatus['status'] == SafetyStatus.cautionWater) {
-      if (_shouldSpeak("EAU", 5)) {
+      if (_shouldSpeak("EAU_CAUTION", 5)) {
+        _waterWarningCount++;
         return ExpertAction(
           instruction: obstacleStatus['message'], 
           isPriority: true
@@ -129,14 +181,11 @@ class SimpleExpert {
     }
 
     // --- RÈGLE 4 : CORRECTION D'ORIENTATION (Heading) ---
-    // Réduction de la sensibilité : On passe à 45° et on vérifie le mouvement.
-    
     bool hasMoved = true;
     if (_lastMovLat != null && _lastMovLon != null) {
       double dist = _calculateDistance(_lastMovLat!, _lastMovLon!, sensor.lat, sensor.lon);
-      // Augmenter la distance de mouvement requise pour stabiliser
       if (dist < 2.0) {
-        hasMoved = false;
+        hasMoved = false; // Ne s'est pas assez déplacé
       }
     }
 
@@ -149,26 +198,22 @@ class SimpleExpert {
     if (diff > 180) diff -= 360;
     if (diff < -180) diff += 360;
     
-    // Seuil de correction augmenté à 40° pour plus de stabilité
+    // Seuil de correction à 40°
     double turnThreshold = 40.0;
     
     if (diff.abs() > turnThreshold && hasMoved) {
-      if (_shouldSpeak("TURN", 8)) { // Intervalle augmenté à 8s
+      // Ignorer si on est en train de contourner un obstacle
+      if (!_isAvoidingObstacle && _shouldSpeak("TURN", 8)) {
         String direction = diff > 0 ? "droite" : "gauche";
         return ExpertAction(
           instruction: "Tournez légèrement à $direction.",
         );
       }
-    } else if (hasMoved) {
+    } else if (hasMoved && !_isAvoidingObstacle) {
       // RÈGLE 5 : CONFIRMATION DEVANT
       if (diff.abs() <= 20 && _shouldSpeak("GOOD", 20)) {
          return ExpertAction(instruction: "Continuez tout droit.");
       }
-      
-      // RÈGLE 6 : ÉCART DE CHEMIN (Simplifié)
-      // Si on est à plus de 15m du prochain waypoint et que le bearing change trop par rapport à la position
-      // Cette logique est normalement gérée par le bearing qui change, mais on peut ajouter un message explicite
-      // si on détecte une dérive latérale importante (implémentation plus complexe requise pour être précis)
     }
 
     return ExpertAction.none();
@@ -177,20 +222,15 @@ class SimpleExpert {
   // --- HELPER MÉTHODES ---
 
   /// Vérifie s'il faut parler ou se taire pour éviter le spam.
-  /// [key] : Identifiant du type de message (ex: "TURN", "EAU").
-  /// [intervalSeconds] : Temps minimum entre deux messages identiques.
   bool _shouldSpeak(String key, int intervalSeconds) {
     final now = DateTime.now();
     
-    // Si c'est le même message qu'avant...
     if (_lastInstruction == key && _lastInstructionTime != null) {
-      // ... et que le temps écoulé est inférieur à l'intervalle...
       if (now.difference(_lastInstructionTime!).inSeconds < intervalSeconds) {
-        return false; // On ne parle pas.
+        return false;
       }
     }
     
-    // Sinon, on met à jour l'historique et on autorise la parole.
     _lastInstruction = key;
     _lastInstructionTime = now;
     return true;

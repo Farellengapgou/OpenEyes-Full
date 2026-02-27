@@ -144,39 +144,32 @@ class _NavigationScreenState extends State<NavigationScreen> {
   // FLUX VOCAL PRINCIPAL
   // ─────────────────────────────────────────────
 
-  Future<void> _startVoiceNavigation() async {
+  Future<void> _startVoiceNavigation({int retryCount = 0}) async {
+    if (retryCount >= 7) {
+      await _speak('Trop de tentatives. Abandon de la recherche.');
+      return;
+    }
+
     try {
       await _speak(
         'Dites votre destination apres la vibration',
         postDelay: const Duration(milliseconds: 300),
       );
 
-      String? rawText;
-      int retryCount = 0;
-      
-      while (retryCount < 3) {
-        rawText = await _speechService.listen(
-          listenDuration: const Duration(seconds: 10),
-          localeId: 'fr_FR',
-        );
-
-        if (rawText != null && rawText.isNotEmpty) break;
-        
-        retryCount++;
-        if (retryCount < 3) {
-          await _speak('Je n\'ai rien entendu. Dites votre destination après la vibration.');
-        }
-      }
+      String? rawText = await _speechService.listen(
+        listenDuration: const Duration(seconds: 15),
+        localeId: 'fr_FR',
+      );
 
       if (rawText == null || rawText.isEmpty) {
-        await _speak('Désolé, je ne vous entends pas bien. Abandon de la recherche.');
-        return;
+        await _speak('Je n\'ai rien entendu. Veuillez réessayer.');
+        return _startVoiceNavigation(retryCount: retryCount + 1);
       }
 
       final destination = _nlpService.extractDestination(rawText);
       if (destination == null || destination.isEmpty) {
-        await _speak('Je n\'ai pas compris la destination.');
-        return;
+        await _speak('Je n\'ai pas compris la destination. Veuillez réessayer.');
+        return _startVoiceNavigation(retryCount: retryCount + 1);
       }
 
       _destination = _nlpService.normalize(destination);
@@ -184,9 +177,9 @@ class _NavigationScreenState extends State<NavigationScreen> {
       // Validation rapide
       final geo = await _mapsService.geocodeDestination(_destination!);
       if (geo == null) {
-        await _speak('Lieu introuvable. Réessayez.');
+        await _speak('Lieu introuvable. Veuillez réessayer.');
         _destination = null;
-        return;
+        return _startVoiceNavigation(retryCount: retryCount + 1);
       }
 
       await _speak(
@@ -196,7 +189,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
       await _confirmDestination(rawText: rawText);
     } catch (e) {
       print("Voice navigation error: $e");
-      await _speak('Erreur système.');
+      await _speak('Erreur système. Veuillez réessayer.');
+      return _startVoiceNavigation(retryCount: retryCount + 1);
     }
   }
 
@@ -204,8 +198,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
     int retryCount = 0,
     String? rawText,
   }) async {
-    if (retryCount >= 3) {
-      await _speak('Trop de tentatives.');
+    if (retryCount >= 7) {
+      await _speak('Trop de tentatives. Abandon.');
       _destination = null;
       return;
     }
@@ -225,7 +219,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
         break;
 
       case ConfirmationResult.unclear:
-        await _speak('Dites simplement oui ou non.');
+        await _speak('Je n\'ai pas compris. Dites simplement oui ou non après la vibration.');
         await _confirmDestination(
           retryCount: retryCount + 1,
           rawText: rawText,
@@ -268,9 +262,77 @@ class _NavigationScreenState extends State<NavigationScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: GestureDetector(
-        onTap: _handleVolumeClick, // triple tap écran
-        child: const SizedBox.expand(),
+      body: Stack(
+        children: [
+          GestureDetector(
+            onTap: _handleVolumeClick, // triple tap écran (simulation bouton volume)
+            child: Container(color: Colors.transparent),
+          ),
+          if (_isNavigating)
+            Positioned(
+              top: 50,
+              left: 10,
+              right: 10,
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.black87,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white30),
+                ),
+                child: StreamBuilder<String>(
+                  stream: _navigationController.instructionStream,
+                  builder: (context, snapshot) {
+                    return Text(
+                      snapshot.data ?? "En route...",
+                      style: const TextStyle(color: Colors.greenAccent, fontSize: 20, fontWeight: FontWeight.bold),
+                      textAlign: TextAlign.center,
+                    );
+                  }
+                ),
+              ),
+            ),
+          if (_isNavigating)
+            Positioned(
+              bottom: 20,
+              left: 10,
+              right: 10,
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.black87,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white30),
+                ),
+                child: StreamBuilder<Map<String, dynamic>>(
+                  stream: _navigationController.debugStream,
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData) return const Text("Chargement données capteurs...", style: TextStyle(color: Colors.white));
+                    final d = snapshot.data!;
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text("📡 SOURCE: ${d['source']}", style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 4),
+                        Text("📍 GPS: ${d['lat']}, ${d['lon']}", style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                        Text("🧭 Cap (IMU): ${d['heading']?.toStringAsFixed(1)}° | 🎯 Obj: ${d['bearingToNext']?.toStringAsFixed(1)}°", style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                        Text("📏 Dist. Next: ${d['distToNext']?.toStringAsFixed(1)}m", style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text("💧 Eau: ${d['water']?.toStringAsFixed(0)}", style: const TextStyle(color: Colors.blueAccent, fontSize: 13)),
+                            Text("🛑 Front: ${d['front']?.toStringAsFixed(2)}m", style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
+                          ],
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

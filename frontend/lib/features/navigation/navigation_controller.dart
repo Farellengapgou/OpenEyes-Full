@@ -27,10 +27,15 @@ class NavigationController {
   // Position locale pour le fallback
   Position? _lastPhonePosition;
 
-  // Stream pour mettre à jour l'UI
+  // Stream pour mettre à jour l'UI avec instructions
   final StreamController<String> _instructionController =
       StreamController<String>.broadcast();
   Stream<String> get instructionStream => _instructionController.stream;
+
+  // Stream pour le debug
+  final StreamController<Map<String, dynamic>> _debugController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get debugStream => _debugController.stream;
 
   /// Constructeur avec injection de dépendances.
   NavigationController({
@@ -50,10 +55,6 @@ class NavigationController {
   // ─────────────────────────────────────────────
 
   /// Démarre la navigation vers [destinationText].
-  /// 1. Géocode via Nominatim
-  /// 2. Récupère itinéraire piéton via OSRM
-  /// 3. Charge les waypoints dans RouteManager
-  /// 4. Connecte la canne Bluetooth
   Future<void> startNavigation(String destinationText, {String? rawTranscription}) async {
     isNavigating = true;
     await _audioGuidance.speak(
@@ -115,6 +116,12 @@ class NavigationController {
 
         _routeManager.setRoute(waypoints);
 
+        print("=== ITINÉRAIRE CHARGÉ === ");
+        for (var idx = 0; idx < waypoints.length; idx++) {
+           print("Etape ${idx + 1}: ${waypoints[idx].instruction} (Lat: ${waypoints[idx].lat}, Lon: ${waypoints[idx].lon})");
+        }
+        print("=========================");
+
         // Message vocal d'intro
         final intro = _mapsService.generateVoiceIntro(route);
         await _audioGuidance.speak(intro);
@@ -175,9 +182,9 @@ class NavigationController {
              water: sensorData.water,
              waterRawData: sensorData.waterRawData,
            );
-           _processSensorData(mergedData);
+           _processSensorData(mergedData, source: "PHONE + CANE IMU");
         } else {
-          _processSensorData(sensorData);
+          _processSensorData(sensorData, source: "CANE GPS");
         }
       });
     } else {
@@ -199,7 +206,7 @@ class NavigationController {
       water: false,
       waterRawData: 0.0,
     );
-    _processSensorData(data);
+    _processSensorData(data, source: "PHONE ONLY");
   }
 
   /// Arrête la navigation.
@@ -217,7 +224,7 @@ class NavigationController {
   // ─────────────────────────────────────────────
 
   /// Boucle principale de navigation (1Hz–10Hz selon données capteurs).
-  void _processSensorData(SensorData data) {
+  void _processSensorData(SensorData data, {String source = "UNKNOWN"}) {
     if (_routeManager.isFinished) return;
 
     // 1. Mise à jour progression GPS
@@ -230,6 +237,18 @@ class NavigationController {
     // 2. Distances et cap vers prochain waypoint
     final distance = _routeManager.getDistanceToNext(data.lat, data.lon);
     final bearing = _routeManager.getBearingToNext(data.lat, data.lon);
+    
+    // Publish debug data
+    _debugController.add({
+      'lat': data.lat,
+      'lon': data.lon,
+      'heading': data.heading,
+      'water': data.waterRawData,
+      'front': data.frontDistance,
+      'distToNext': distance,
+      'bearingToNext': bearing,
+      'source': source,
+    });
 
     // 3. Système expert (fusion obstacles + IMU + GPS)
     final action = _expert.evaluate(
