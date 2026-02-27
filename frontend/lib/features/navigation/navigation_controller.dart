@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:geolocator/geolocator.dart';
+import 'package:flutter_compass/flutter_compass.dart';
 import 'ble_service.dart';
 import 'simple_expert.dart';
 import 'audio_guidance.dart';
@@ -22,10 +23,12 @@ class NavigationController {
   bool isNavigating = false;
   StreamSubscription? _bleSubscription;
   StreamSubscription? _gpsSubscription;
+  StreamSubscription<CompassEvent>? _compassSubscription;
   Timer? _watchdog;
 
   // Position locale pour le fallback
   Position? _lastPhonePosition;
+  double _lastPhoneHeading = 0.0;
 
   // Stream pour mettre à jour l'UI avec instructions
   final StreamController<String> _instructionController =
@@ -58,42 +61,30 @@ class NavigationController {
   Future<void> startNavigation(String destinationText, {String? rawTranscription}) async {
     isNavigating = true;
     await _audioGuidance.speak(
-        "Calcul de l'itinéraire vers $destinationText.");
+        "Calcul de l'itinéraire vers $destinationText en cours. Veuillez patienter.");
+    _instructionController.add("Calcul itinéraire vers $destinationText...");
 
-    // Démarrer l'écoute GPS du téléphone dès le début (utile pour le fallback même si la canne est là)
-    _gpsSubscription?.cancel();
-    _gpsSubscription = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 2, 
-      ),
-    ).listen((Position position) {
-      _lastPhonePosition = position;
-      if (isNavigating && !_bleService.isConnected) {
-        _processPhonePosition(position);
-      }
-    });
+    Position appPos;
+    try {
+      appPos = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.best);
+      _lastPhonePosition = appPos;
+    } catch (e) {
+      await _audioGuidance.speak("Erreur: Impossible d'obtenir la position GPS.");
+      isNavigating = false;
+      return;
+    }
 
     try {
-      // 1. Position actuelle
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.best,
-      );
-      _lastPhonePosition = position;
-
-      // 2. Géocodage + Routing (Nominatim + OSRM) – directs depuis Flutter
       final route = await _mapsService.getRouteFromText(
         destination: destinationText,
-        rawInput: rawTranscription ?? destinationText, // Utilise raw pour le fallback
-        originLat: position.latitude,
-        originLng: position.longitude,
+        rawInput: rawTranscription ?? destinationText,
+        originLat: appPos.latitude,
+        originLng: appPos.longitude,
       );
 
       if (route == null) {
-        await _audioGuidance.speak(
-            "Impossible de calculer l'itinéraire. Vérifiez votre connexion.");
-        isNavigating = false;
-        return;
+        throw Exception("Route introuvable");
       }
 
       // 3. Charger les waypoints
@@ -136,7 +127,38 @@ class NavigationController {
       return;
     }
 
-    // 4. Connexion Bluetooth (canne)
+    // 4. Lancer l'écoute des capteurs
+    _startSensorStreams();
+  }
+
+  // ─────────────────────────────────────────────
+  // GESTION DES FLUX (STREAMS)
+  // ─────────────────────────────────────────────
+
+  void _startSensorStreams() async {
+    _bleSubscription?.cancel();
+    _gpsSubscription?.cancel();
+    _compassSubscription?.cancel();
+
+    // 1. Ecoute de la boussole du téléphone (Fallback)
+    _compassSubscription = FlutterCompass.events?.listen((CompassEvent event) {
+       _lastPhoneHeading = event.heading ?? _lastPhoneHeading;
+    });
+
+    // 2. Écoute du GPS du téléphone (Fallback si canne déconnectée)
+    _gpsSubscription = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 2,
+      ),
+    ).listen((Position pos) {
+      _lastPhonePosition = pos;
+      if (!_bleService.isConnected) {
+        _processPhonePosition(pos);
+      }
+    });
+
+    // 3. Connexion Bluetooth (canne)
     bool bleConnected = false;
     try {
       if (!_bleService.isConnected) {
@@ -162,7 +184,7 @@ class NavigationController {
         }
       });
 
-      _bleSubscription = _bleService.sensorStream.listen((sensorData) {
+      _bleSubscription = _bleService.sensorDataStream.listen((sensorData) {
         if (!isNavigating) return;
         if (!dataReceived) {
           dataReceived = true;
@@ -174,7 +196,7 @@ class NavigationController {
            final mergedData = SensorData(
              lat: _lastPhonePosition!.latitude,
              lon: _lastPhonePosition!.longitude,
-             heading: sensorData.heading, // On garde le heading de la canne (IMU)
+             heading: sensorData.heading == 0.0 ? _lastPhoneHeading : sensorData.heading, // On utilise la boussole tél si canne = 0
              frontDistance: sensorData.frontDistance,
              leftDistance: sensorData.leftDistance,
              rightDistance: sensorData.rightDistance,
@@ -184,7 +206,19 @@ class NavigationController {
            );
            _processSensorData(mergedData, source: "PHONE + CANE IMU");
         } else {
-          _processSensorData(sensorData, source: "CANE GPS");
+           // On s'assure que le heading est bon même avec GPS canne
+           final finalData = SensorData(
+             lat: sensorData.lat,
+             lon: sensorData.lon,
+             heading: sensorData.heading == 0.0 ? _lastPhoneHeading : sensorData.heading,
+             frontDistance: sensorData.frontDistance,
+             leftDistance: sensorData.leftDistance,
+             rightDistance: sensorData.rightDistance,
+             obstacleUp: sensorData.obstacleUp,
+             water: sensorData.water,
+             waterRawData: sensorData.waterRawData,
+           );
+           _processSensorData(finalData, source: "CANE SENSORS");
         }
       });
     } else {

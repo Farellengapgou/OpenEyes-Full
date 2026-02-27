@@ -30,6 +30,7 @@ dependencies:
 
   # 🔵 Bluetooth (canne intelligente)
   flutter_blue_plus: ^1.32.12
+  flutter_compass: ^0.8.1
 
 dev_dependencies:
   flutter_test:
