@@ -24,26 +24,86 @@ class NlpService {
 
   /// Corrections phonétiques des erreurs de STT fréquentes à Yaoundé.
   static const Map<String, String> _corrections = {
+    // Mendong
     'minced': 'mendong',
     'minded': 'mendong',
     'mendon': 'mendong',
     'mendog': 'mendong',
     'mend ong': 'mendong',
+    'main d\'ong': 'mendong',
+    'men dont': 'mendong',
+    'medong': 'mendong',
+    'mé dont': 'mendong',
+
+    // Marché
     'marshe': 'marché',
     'marche': 'marché',
+    'marcher': 'marché',
+
+    // Carrefour
     'carulfour': 'carrefour',
     'car four': 'carrefour',
     'care four': 'carrefour',
+    'carre four': 'carrefour',
+
+    // Emia
     'emi a': 'emia',
     'emiya': 'emia',
+    'eymia': 'emia',
+    'mia': 'emia',
+    'et mia': 'emia',
+    'hé mia': 'emia',
+    'henya': 'emia',
+    'henia': 'emia',
+    'nya': 'emia',
+    'enmia': 'emia',
+    'enia': 'emia',
+
+    // Nkomo
     'n komo': 'nkomo',
     'en como': 'nkomo',
+    'n k o m o': 'nkomo',
+    'in como': 'nkomo',
+
+    // Nlongkak
     'nlong kak': 'nlongkak',
     'long kak': 'nlongkak',
+    'l\'on cac': 'nlongkak',
+    'non kak': 'nlongkak',
+
+    // Bastos
     'basto': 'bastos',
+    'astos': 'bastos',
+    'ast': 'bastos',
+    'bàsto': 'bastos',
+    'basse tos': 'bastos',
+    'bas tos': 'bastos',
+
+    // Odza
     'od za': 'odza',
+    'odja': 'odza',
+    'odzaa': 'odza',
+    'o d z a': 'odza',
+    'o dza': 'odza',
+    'osa': 'odza',
+    'hoza': 'odza',
+
+    // Yaoundé
     'yaounde': 'yaoundé',
+    'y a ou n d é': 'yaoundé',
+
+    // Mokolo
     'moco lo': 'mokolo',
+    'mo co lo': 'mokolo',
+    'mocolo': 'mokolo',
+    'mao colo': 'mokolo',
+    'colo': 'mokolo',
+    'moko lo': 'mokolo',
+    'moko': 'mokolo',
+    'moko lo': 'mokolo',
+    'mokco lo': 'mokolo',  
+    'lo': 'mokolo',
+
   };
 
   /// Corrige les erreurs phonétiques courantes du STT.
