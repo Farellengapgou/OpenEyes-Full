@@ -23,6 +23,7 @@ class NlpService {
   };
 
   /// Corrections phonétiques des erreurs de STT fréquentes à Yaoundé.
+  // ceci pourrait être elargie dans l'amélioration du modèle de parsing
   static const Map<String, String> _corrections = {
     // Mendong
     'minced': 'mendong',
@@ -100,7 +101,6 @@ class NlpService {
     'colo': 'mokolo',
     'moko lo': 'mokolo',
     'moko': 'mokolo',
-    'moko lo': 'mokolo',
     'mokco lo': 'mokolo',  
     'lo': 'mokolo',
 
