@@ -1,6 +1,8 @@
 # 🦯 Navigation Vocale - App Mobile
 
-Application mobile Flutter de navigation vocale pour personnes malvoyantes à Yaoundé (Cameroun).
+OpenEyes est une application mobile développée avec Flutter, destinée à assister les personnes malvoyantes dans leurs déplacements.
+
+Le système fonctionne en complément d’une canne électronique connectée en Bluetooth Low Energy (BLE). L’application assure la navigation GPS vocale et le traitement intelligent des obstacles détectés par la canne.
 
 ## 📱 Fonctionnalités
 
@@ -11,9 +13,6 @@ Application mobile Flutter de navigation vocale pour personnes malvoyantes à Ya
 - ✅ **Interface accessible** pour malvoyants
 - ✅ **Support Bluetooth** (pour canne GSM 8008)
 
-## 🎯 Captures d'écran
-
-[TODO: Ajouter screenshots]
 
 ## 🔧 Installation Développement
 
@@ -26,8 +25,8 @@ Application mobile Flutter de navigation vocale pour personnes malvoyantes à Ya
 ### Setup
 ```bash
 # 1. Cloner le repo
-git clone https://github.com/TASSEAROLE/blind-navigation-app.git
-cd blind-navigation-app
+git clone https://github.com/Farellengapgou/OpenEyes-Full.git
+cd OpenEyes-Full
 
 # 2. Installer dépendances
 flutter pub get
@@ -53,12 +52,6 @@ flutter build apk --release
 
 ## 🔑 Configuration
 
-### Backend API
-Modifier `lib/services/api_service.dart` :
-```dart
-static const String baseUrl = 'VOTRE_URL_BACKEND';
-```
-
 ### Permissions Android
 L'app demande :
 - 🎤 Microphone (enregistrement audio)
@@ -76,14 +69,22 @@ L'app demande :
 ### Via Play Store
 [TODO: Lien Play Store]
 
-## 🏗️ Architecture
+## 🏗️ Structure du projet
 ```
-lib/
-├── main.dart              # Point d'entrée
-├── services/
-│   └── api_service.dart   # Communication backend
-└── screens/
-    └── navigation_screen.dart  # Écran principal
+blind-navigation-app/
+├── frontend/              # Application Flutter (active)
+│   ├── lib/
+│   ├── android/
+│   ├── ios/
+│   └── pubspec.yaml
+│
+├── backend/               # Ancienne architecture backend (non utilisée)
+│   ├── app.py
+│   ├── routes/
+│   ├── services/
+│   └── requirements.txt
+│
+└── README.md
 ```
 
 ## 🧪 Tests
@@ -118,7 +119,7 @@ Les contributions sont bienvenues !
 
 ## 📝 Changelog
 
-### v1.0.0 (2024)
+### v1.0.0 (2026)
 - ✅ Navigation vocale de base
 - ✅ Transcription audio avec Whisper
 - ✅ GPS temps réel
@@ -130,13 +131,12 @@ MIT
 
 ## 👥 Auteurs
 
-- [@TASSEAROLE](https://github.com/TASSEAROLE)
+Groupe "Canne intelligente pour aveugle"
+4GI – Promo 2027
 
 ## 🔗 Liens
 
-- Backend API: [blind-navigation-backend](https://github.com/TASSEAROLE/blind-navigation-backend)
-- Documentation: [Wiki](https://github.com/TASSEAROLE/blind-navigation-app/wiki)
 
 ## 💡 Support
 
-Pour bugs ou questions, ouvrir une [issue](https://github.com/TASSEAROLE/blind-navigation-app/issues).
+Pour bugs ou questions, ouvrir une [issue]https://github.com/Farellengapgou/OpenEyes-Full/issues
